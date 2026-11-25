@@ -388,15 +388,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fsrs7-device-check"
-version = "0.1.0"
-dependencies = [
- "cc",
- "fsrs",
- "inki",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -556,6 +547,7 @@ dependencies = [
  "clap",
  "fsrs",
  "http-body-util",
+ "inki-core",
  "rusqlite",
  "serde",
  "serde_json",
@@ -564,6 +556,14 @@ dependencies = [
  "tower",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "inki-core"
+version = "0.1.0"
+dependencies = [
+ "fsrs",
+ "libm",
 ]
 
 [[package]]

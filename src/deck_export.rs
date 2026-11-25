@@ -57,21 +57,8 @@ impl DeckExport {
     }
 }
 
-/// Seconds for an FSRS interval, exactly as the device rounds it
-/// (`flashcards::intervalSeconds`).
-pub fn interval_seconds(days: f32) -> u32 {
-    if days.is_nan() || days <= 0.0 {
-        return 60;
-    }
-    let seconds = (f64::from(days) * 86_400.0).round();
-    if seconds < 60.0 {
-        60
-    } else if seconds > f64::from(u32::MAX) {
-        u32::MAX
-    } else {
-        seconds as u32
-    }
-}
+/// Seconds for an FSRS interval, exactly as the reader rounds it.
+pub use inki_core::fsrs7::interval_seconds;
 
 /// File name (without extension) for a deck: `::` becomes ` - `, and characters FAT
 /// file systems reject become `_`.

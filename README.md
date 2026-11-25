@@ -6,14 +6,19 @@ scheduled with [FSRS-7](https://github.com/open-spaced-repetition/fsrs-rs).
 The FSRS-7 maths runs on the device. Training your personal parameters is too
 heavy for the ESP32-C3, so this PC tool does it from your Anki review history.
 
+The scheduler and the `.inki` deck format are written once, in Rust
+(`crates/inki-core`), and used by both this tool and the reader's firmware,
+so the PC and the reader read and write decks and schedule cards with the
+same code.
+
 ## Layout
 
 | Path | What |
 |---|---|
 | `src/` | `inki` command-line tool (Rust) |
-| `firmware/lib/Fsrs7/` | FSRS-7 scheduler for the device (C++17, no allocation, floats only) |
+| `crates/inki-core/` | Shared with the firmware: FSRS-7, the `.inki` format, the parameter file (`no_std`, no allocation) |
+| `crates/inki-ffi/` | C interface to inki-core, built as a static library for the firmware (`include/inki_core.h`) |
 | `../crossink-flashcards/` | CrossInk firmware fork with the flashcard screens (separate repo, alongside this one) |
-| `crates/fsrs7-device-check/` | Builds the C++ library on the PC and tests it against fsrs-rs |
 | `WISHLIST.md` | RWKV-Instant / RWKV-Curve plans |
 
 ## Web app
@@ -94,29 +99,20 @@ fsrs7 <34 comma-separated numbers>
 desired_retention 0.9
 ```
 
-## Device library
+## Shared code in the firmware
 
-Copy `firmware/lib/Fsrs7` into the CrossInk fork's `lib/` folder; PlatformIO
-picks it up automatically. Per card the app stores a `fsrs7::MemoryState`
-(12 bytes) and the time of the last review.
+The firmware fork's build (`scripts/build_inki_core.py`) compiles
+`crates/inki-ffi` for the board's CPU and links it, so it needs this
+repository next to the fork (`../inki`) or at `$INKI_DIR`, and Rust with:
 
-```cpp
-#include <Fsrs7.h>
-
-fsrs7::Config config = fsrs7::defaultConfig();
-fsrs7::parseConfig(fileText, fileLength, config);  // keeps defaults on error
-
-// On an answer. `card.isNew` cards have no state yet.
-const fsrs7::NextStates next = fsrs7::nextStates(
-    config.params, card.isNew ? nullptr : &card.memory,
-    config.desiredRetention, elapsedDays);
-const fsrs7::ScheduledState& chosen = next.forRating(fsrs7::Rating::Good);
-card.memory = chosen.memory;
-card.due = now + chosen.intervalDays;
+```sh
+rustup target add riscv32imc-unknown-none-elf   # X3 / X4 (ESP32-C3)
 ```
 
-`nextStates` also gives the interval for each button, to show on screen before
-the user answers.
+Its C++ code calls inki-core through thin wrappers in `lib/Fsrs7/Fsrs7.h` and
+`lib/Flashcards/FlashcardFormat.cpp`. Rust's maths (`libm`) and a small
+number parser keep the results bit-identical on the PC and the reader; the
+firmware grows by about 6 KB.
 
 ## Checks
 
@@ -126,11 +122,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The device tests compare the C++ code with fsrs-rs 7.0.0 over thousands of
+inki-core's tests compare its FSRS-7 with fsrs-rs 7.0.0 over thousands of
 random review histories and parameter sets: memory states and recall within
-0.01%, intervals within 0.1%.
+0.01%, intervals within 0.1%. To check the firmware build of the shared code:
+
+```sh
+cargo build --release --manifest-path crates/inki-ffi/Cargo.toml --target riscv32imc-unknown-none-elf
+```
 
 ## Credits
 
 FSRS-7 by [Open Spaced Repetition](https://github.com/open-spaced-repetition),
-ported from fsrs-rs (BSD-3-Clause).
+ported from fsrs-rs (BSD-3-Clause; see `crates/inki-core/LICENSE-fsrs-rs`).

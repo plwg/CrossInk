@@ -1,35 +1,46 @@
-//! The `.inki` deck file: one file per deck on the reader's SD card, in
-//! `/flashcards/<deck>.inki`. Read by `lib/Flashcards` in the firmware and
-//! documented in its `docs/flashcards.md`. All integers are little-endian.
-//!
-//! ```text
-//! header        32 bytes (below)
-//! deck name     UTF-8 Anki deck name, name_length bytes
-//! card index    card_count × 16 bytes: u64 Anki card id, u32 text offset, u32 text length
-//! card text     per card: question, NUL, answer
-//! state         card_count × 20 bytes at state_offset, updated in place by the reader
-//! answer log    32-byte entries from log_offset to the end, appended by the reader
-//! ```
-//!
-//! Header: `INKD`, u16 version, u16 flags, u32 card_count, u32 index_offset,
-//! u32 state_offset, u32 log_offset, u16 name_length, u16 reserved,
-//! u32 reserved.
+//! Whole `.inki` deck files, built from and read with the fixed-size pieces
+//! in `inki_core::format`, which the reader's firmware uses too. The layout
+//! is documented there and in the firmware fork's `docs/flashcards.md`.
 
 use anyhow::{Context, Result, ensure};
+use inki_core::format::{
+    CardIndexEntry, DeckHeader, HEADER_SIZE, INDEX_ENTRY_SIZE, MAX_CARD_TEXT,
+    REVIEW_LOG_ENTRY_SIZE as LOG_ENTRY_SIZE, STATE_RECORD_SIZE, StateRecord, split_card_text,
+};
+use inki_core::fsrs7::MemoryState;
 
 use crate::deck_export::{CardState, ExportCard};
 
-pub const EXTENSION: &str = "inki";
-const MAGIC: &[u8; 4] = b"INKD";
-const VERSION: u16 = 1;
-const HEADER_SIZE: usize = 32;
-const INDEX_ENTRY_SIZE: usize = 16;
-const STATE_RECORD_SIZE: usize = 20;
-const LOG_ENTRY_SIZE: usize = 32;
-/// The reader reads at most this many bytes of a card's text.
-const MAX_CARD_TEXT: usize = 4096;
+pub use inki_core::format::EXTENSION;
+
 const MAX_FRONT_TEXT: usize = 2047;
 const MAX_NAME: usize = 1024;
+
+impl From<CardState> for StateRecord {
+    fn from(s: CardState) -> Self {
+        Self {
+            memory: MemoryState {
+                stability: s.stability,
+                difficulty: s.difficulty,
+                stability_fast: s.stability_fast,
+            },
+            last_review: s.last_review,
+            due: s.due,
+        }
+    }
+}
+
+impl From<StateRecord> for CardState {
+    fn from(r: StateRecord) -> Self {
+        Self {
+            stability: r.memory.stability,
+            difficulty: r.memory.difficulty,
+            stability_fast: r.memory.stability_fast,
+            last_review: r.last_review,
+            due: r.due,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeckFile {
@@ -65,22 +76,24 @@ impl DeckFile {
         let log_offset = state_offset + count * STATE_RECORD_SIZE;
         let u32_of = |n: usize| u32::try_from(n).context("deck too large");
 
+        let header = DeckHeader {
+            card_count: u32_of(count)?,
+            index_offset: u32_of(index_offset)?,
+            state_offset: u32_of(state_offset)?,
+            log_offset: u32_of(log_offset)?,
+            name_length: name.len() as u16,
+        };
         let mut out = Vec::with_capacity(log_offset + self.answer_log.len());
-        out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&VERSION.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
-        for n in [count, index_offset, state_offset, log_offset] {
-            out.extend_from_slice(&u32_of(n)?.to_le_bytes());
-        }
-        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        out.extend_from_slice(&[0; 6]);
+        out.extend_from_slice(&header.encode());
         out.extend_from_slice(name.as_bytes());
-
         let mut offset = text_start;
         for (card, text) in self.cards.iter().zip(&texts) {
-            out.extend_from_slice(&(card.anki_id as u64).to_le_bytes());
-            out.extend_from_slice(&u32_of(offset)?.to_le_bytes());
-            out.extend_from_slice(&u32_of(text.len())?.to_le_bytes());
+            let entry = CardIndexEntry {
+                anki_card_id: card.anki_id as u64,
+                text_offset: u32_of(offset)?,
+                text_length: u32_of(text.len())?,
+            };
+            out.extend_from_slice(&entry.encode());
             offset += text.len();
         }
         for text in &texts {
@@ -88,12 +101,7 @@ impl DeckFile {
         }
         out.resize(state_offset, 0);
         for card in &self.cards {
-            let s = card.state;
-            out.extend_from_slice(&s.stability.to_le_bytes());
-            out.extend_from_slice(&s.difficulty.to_le_bytes());
-            out.extend_from_slice(&s.stability_fast.to_le_bytes());
-            out.extend_from_slice(&s.last_review.to_le_bytes());
-            out.extend_from_slice(&s.due.to_le_bytes());
+            out.extend_from_slice(&StateRecord::from(card.state).encode());
         }
         let whole_entries = self.answer_log.len() / LOG_ENTRY_SIZE * LOG_ENTRY_SIZE;
         out.extend_from_slice(&self.answer_log[..whole_entries]);
@@ -101,76 +109,46 @@ impl DeckFile {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let header_bytes: &[u8; HEADER_SIZE] = bytes
+            .get(..HEADER_SIZE)
+            .and_then(|b| b.try_into().ok())
+            .context("not an .inki deck file")?;
         ensure!(
-            bytes.len() >= HEADER_SIZE && &bytes[..4] == MAGIC,
+            header_bytes[..4] == inki_core::format::MAGIC,
             "not an .inki deck file"
         );
-        let version = u16_at(bytes, 4);
-        ensure!(
-            version == VERSION,
-            "deck file version {version} is not supported"
-        );
-        let count = u32_at(bytes, 8) as usize;
-        let index_offset = u32_at(bytes, 12) as usize;
-        let state_offset = u32_at(bytes, 16) as usize;
-        let log_offset = u32_at(bytes, 20) as usize;
-        let name_len = usize::from(u16_at(bytes, 24));
-        ensure!(
-            index_offset >= HEADER_SIZE + name_len
-                && state_offset >= index_offset + count * INDEX_ENTRY_SIZE
-                && log_offset == state_offset + count * STATE_RECORD_SIZE
-                && bytes.len() >= log_offset,
-            "the deck file is damaged"
-        );
-        let anki_deck =
-            String::from_utf8_lossy(&bytes[HEADER_SIZE..HEADER_SIZE + name_len]).into_owned();
+        let h = DeckHeader::decode(header_bytes, bytes.len() as u64)
+            .context("the deck file is damaged or from a newer version of inki")?;
+        let name_end = HEADER_SIZE + usize::from(h.name_length);
+        let anki_deck = String::from_utf8_lossy(&bytes[HEADER_SIZE..name_end]).into_owned();
 
-        let cards = (0..count)
+        let cards = (0..h.card_count as usize)
             .map(|i| {
-                let e = index_offset + i * INDEX_ENTRY_SIZE;
-                let text_offset = u32_at(bytes, e + 8) as usize;
-                let text_len = u32_at(bytes, e + 12) as usize;
+                let at = h.index_offset as usize + i * INDEX_ENTRY_SIZE;
+                let entry = CardIndexEntry::decode(bytes[at..at + INDEX_ENTRY_SIZE].try_into()?);
+                let start = entry.text_offset as usize;
                 let text = bytes
-                    .get(text_offset..text_offset + text_len)
+                    .get(start..start + entry.text_length as usize)
                     .context("the deck file is damaged")?;
-                let text = String::from_utf8_lossy(text);
-                let (front, back) = text.split_once('\0').unwrap_or((&text, ""));
-                let r = state_offset + i * STATE_RECORD_SIZE;
+                let (front, back) = split_card_text(text);
+                let at = h.state_offset as usize + i * STATE_RECORD_SIZE;
+                let state = StateRecord::decode(bytes[at..at + STATE_RECORD_SIZE].try_into()?);
                 Ok(ExportCard {
-                    anki_id: u64::from_le_bytes(bytes[e..e + 8].try_into()?) as i64,
-                    front: front.to_string(),
-                    back: back.to_string(),
-                    state: CardState {
-                        stability: f32_at(bytes, r),
-                        difficulty: f32_at(bytes, r + 4),
-                        stability_fast: f32_at(bytes, r + 8),
-                        last_review: u32_at(bytes, r + 12),
-                        due: u32_at(bytes, r + 16),
-                    },
+                    anki_id: entry.anki_card_id as i64,
+                    front: String::from_utf8_lossy(front).into_owned(),
+                    back: String::from_utf8_lossy(back).into_owned(),
+                    state: state.into(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
         // A partly written last entry (power lost mid-answer) is dropped.
-        let log = &bytes[log_offset..];
-        let whole = log.len() / LOG_ENTRY_SIZE * LOG_ENTRY_SIZE;
+        let log_end = h.review_log_append_offset(bytes.len() as u64) as usize;
         Ok(Self {
             anki_deck,
             cards,
-            answer_log: log[..whole].to_vec(),
+            answer_log: bytes[h.log_offset as usize..log_end].to_vec(),
         })
     }
-}
-
-fn u16_at(b: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([b[at], b[at + 1]])
-}
-
-fn u32_at(b: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(b[at..at + 4].try_into().expect("4 bytes"))
-}
-
-fn f32_at(b: &[u8], at: usize) -> f32 {
-    f32::from_le_bytes(b[at..at + 4].try_into().expect("4 bytes"))
 }
 
 /// Cuts `text` to at most `max` bytes on a character boundary, marking the cut.
@@ -201,6 +179,14 @@ fn card_text(card: &ExportCard) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn u16_at(b: &[u8], at: usize) -> u16 {
+        u16::from_le_bytes([b[at], b[at + 1]])
+    }
+
+    fn u32_at(b: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+    }
 
     fn card(id: i64, front: &str, back: &str, last_review: u32) -> ExportCard {
         ExportCard {

@@ -1,7 +1,6 @@
-//! The FSRS-7 parameter file copied to the device's SD card.
-//!
-//! Plain text, one `key value` per line, read on the device by
-//! `fsrs7::parseConfig` in `firmware/lib/Fsrs7`:
+//! The FSRS-7 parameter file copied to the device's SD card. Parsing is
+//! shared with the reader through `inki_core::params`; this module adds
+//! writing it.
 //!
 //! ```text
 //! # comment
@@ -9,9 +8,10 @@
 //! desired_retention 0.9
 //! ```
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, anyhow, ensure};
+use inki_core::params;
 
-pub const PARAM_COUNT: usize = 34;
+pub const PARAM_COUNT: usize = inki_core::fsrs7::PARAM_COUNT;
 pub const FILE_NAME: &str = "fsrs7-params.txt";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,15 +23,15 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            params: fsrs::DEFAULT_PARAMETERS.to_vec(),
-            desired_retention: 0.9,
+            params: inki_core::fsrs7::DEFAULT_PARAMS.to_vec(),
+            desired_retention: inki_core::fsrs7::DEFAULT_DESIRED_RETENTION,
         }
     }
 }
 
 pub fn check_retention(value: f32) -> Result<f32> {
     ensure!(
-        (0.0001..=0.9999).contains(&value),
+        params::valid_retention(value),
         "desired retention must be between 0.0001 and 0.9999, got {value}"
     );
     Ok(value)
@@ -53,37 +53,15 @@ impl Config {
         out
     }
 
-    /// Parses the file. Missing keys keep their defaults; unknown keys are ignored.
+    /// Parses the file exactly as the reader does: missing keys keep their
+    /// defaults, unknown keys are ignored, parameters are clipped to the
+    /// ranges FSRS-7 accepts.
     pub fn parse(text: &str) -> Result<Self> {
-        let mut config = Self::default();
-        for (number, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let (key, value) = line.split_once([' ', '\t']).unwrap_or((line, ""));
-            let value = value.trim();
-            let context = || format!("line {}: {line}", number + 1);
-            match key {
-                "fsrs7" => {
-                    let params = value
-                        .split(',')
-                        .map(|v| v.trim().parse::<f32>())
-                        .collect::<Result<Vec<_>, _>>()
-                        .with_context(context)?;
-                    if params.len() != PARAM_COUNT || params.iter().any(|v| !v.is_finite()) {
-                        bail!("{}: expected {PARAM_COUNT} finite numbers", context());
-                    }
-                    config.params = params;
-                }
-                "desired_retention" => {
-                    let value = value.parse::<f32>().with_context(context)?;
-                    config.desired_retention = check_retention(value).with_context(context)?;
-                }
-                _ => {}
-            }
-        }
-        Ok(config)
+        let parsed = params::parse(text.as_bytes()).map_err(|e| anyhow!("{e}"))?;
+        Ok(Self {
+            params: parsed.params.to_vec(),
+            desired_retention: parsed.desired_retention,
+        })
     }
 }
 
@@ -94,7 +72,7 @@ mod tests {
     #[test]
     fn round_trips_exactly() {
         let mut config = Config::default();
-        config.params[3] = 1.0 / 3.0;
+        config.params[3] = 12.345_679;
         config.desired_retention = 0.87;
         let text = config.to_text(&["trained on 10 reviews".into()]);
         assert!(text.starts_with("# trained on 10 reviews\nfsrs7 "));

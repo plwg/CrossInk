@@ -1,7 +1,8 @@
 //! PC companion for an Anki-style flashcard app on CrossInk e-readers.
 //!
-//! Trains FSRS-7 parameters from an Anki review history and writes them in the
-//! format the device's scheduler (`firmware/lib/Fsrs7`) reads.
+//! Turns Anki decks into `.inki` files, updates them with new Anki cards, and
+//! trains FSRS-7 parameters. The scheduler and the deck format live in the
+//! `inki-core` crate, which the reader's firmware uses too.
 
 pub mod anki_model;
 pub mod collection;

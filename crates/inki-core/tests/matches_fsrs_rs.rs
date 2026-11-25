@@ -1,7 +1,53 @@
-//! Checks the firmware FSRS-7 port against fsrs-rs v7, the reference implementation.
+//! Checks inki-core's FSRS-7 port, which the firmware runs, against fsrs-rs
+//! v7, the reference implementation.
 
 use fsrs::{DEFAULT_PARAMETERS, FSRS, FSRSItem, FSRSReview, MemoryState};
-use fsrs7_device_check as device;
+
+/// The scheduler API as the firmware calls it: parameters are clipped on
+/// every call, as the reader does when it loads them.
+mod device {
+    use inki_core::fsrs7::{self, Rating};
+
+    pub type Params = fsrs7::Params;
+    pub type State = fsrs7::MemoryState;
+
+    fn clipped(w: &Params) -> Params {
+        let mut p = *w;
+        fsrs7::clip_params(&mut p);
+        p
+    }
+
+    pub fn default_params() -> Params {
+        fsrs7::DEFAULT_PARAMS
+    }
+
+    pub fn clip(w: Params) -> Params {
+        clipped(&w)
+    }
+
+    pub fn retrievability(w: &Params, state: State, elapsed: f32) -> f32 {
+        fsrs7::retrievability(&clipped(w), &state, elapsed)
+    }
+
+    pub fn initial_state(w: &Params, rating: u32) -> State {
+        fsrs7::initial_state(&clipped(w), Rating::from_u8(rating as u8))
+    }
+
+    pub fn next_state(w: &Params, state: State, elapsed: f32, rating: u32) -> State {
+        fsrs7::next_state(&clipped(w), &state, elapsed, Rating::from_u8(rating as u8))
+    }
+
+    pub fn next_states(
+        w: &Params,
+        current: Option<State>,
+        retention: f32,
+        elapsed: f32,
+    ) -> ([State; 4], [f32; 4]) {
+        let n = fsrs7::next_states(&clipped(w), current.as_ref(), retention, elapsed);
+        let all = [n.again, n.hard, n.good, n.easy];
+        (all.map(|s| s.memory), all.map(|s| s.interval_days))
+    }
+}
 
 const CASES: usize = 2_000;
 /// fsrs-rs caps stability and intervals at 100 years.
@@ -245,70 +291,4 @@ fn non_finite_parameters_are_replaced() {
     assert!(clipped.iter().all(|v| v.is_finite()));
     assert_eq!(clipped[5], 0.001);
     assert_eq!(clipped[24], 0.01);
-}
-
-fn params_line(w: &[f32]) -> String {
-    let values: Vec<String> = w.iter().map(|v| v.to_string()).collect();
-    format!("fsrs7 {}", values.join(","))
-}
-
-#[test]
-fn parses_config_file() {
-    let mut w = DEFAULT_PARAMETERS;
-    w[0] = 0.25;
-    let text = format!(
-        "# inki FSRS-7 parameters\r\n{}\r\ndesired_retention 0.85\nunknown_key 1\n",
-        params_line(&w)
-    );
-    let (params, retention) = device::parse_config(&text).expect("valid file");
-    assert_eq!(params, w);
-    assert_eq!(retention, 0.85);
-}
-
-#[test]
-fn config_defaults_and_errors() {
-    let (params, retention) = device::parse_config("# empty\n").expect("valid");
-    assert_eq!(params, DEFAULT_PARAMETERS);
-    assert_eq!(retention, 0.9);
-
-    let short = params_line(&DEFAULT_PARAMETERS[..33]);
-    assert!(device::parse_config(&short).is_none(), "33 values");
-    let long = format!("{},1.0", params_line(&DEFAULT_PARAMETERS));
-    assert!(device::parse_config(&long).is_none(), "35 values");
-    assert!(device::parse_config("desired_retention abc").is_none());
-    assert!(device::parse_config("desired_retention 1.5").is_none());
-    assert!(device::parse_config("fsrs7 nan").is_none());
-}
-
-#[test]
-fn out_of_range_values_in_file_are_clipped() {
-    let mut w = DEFAULT_PARAMETERS;
-    w[24] = 3.0;
-    let (params, _) = device::parse_config(&params_line(&w)).expect("valid");
-    assert_eq!(params[24], 0.95);
-}
-
-#[test]
-fn reads_file_written_by_inki() {
-    let mut rng = Rng(0x0BAD_5EED_1234_5678);
-    for _ in 0..50 {
-        let mut params = DEFAULT_PARAMETERS.to_vec();
-        for value in &mut params {
-            *value *= rng.range(0.5, 1.5);
-        }
-        let config = inki::config::Config {
-            params: params.clone(),
-            desired_retention: rng.range(0.7, 0.99),
-        };
-        let text = config.to_text(&["inki FSRS-7 parameters".into()]);
-        let (device_params, retention) = device::parse_config(&text).expect("device parses it");
-        let mut raw = [0.0; device::PARAM_COUNT];
-        raw.copy_from_slice(&params);
-        assert_eq!(
-            device_params,
-            device::clip(raw),
-            "exact round trip, then clipped"
-        );
-        assert_eq!(retention, config.desired_retention);
-    }
 }
