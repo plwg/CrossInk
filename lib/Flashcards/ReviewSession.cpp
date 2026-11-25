@@ -1,7 +1,8 @@
 #include "ReviewSession.h"
 
+#include <inki_core.h>
+
 #include <algorithm>
-#include <cmath>
 
 namespace flashcards {
 
@@ -61,13 +62,8 @@ StudyDay studyDayFor(uint32_t now, int32_t utcOffsetSeconds) {
                   static_cast<uint32_t>(std::min<int64_t>(start + kSecondsPerDay, UINT32_MAX))};
 }
 
-uint32_t intervalSeconds(float days) {
-  if (!(days > 0.0f)) return 60;
-  const double seconds = std::round(static_cast<double>(days) * kSecondsPerDay);
-  if (seconds < 60.0) return 60;
-  if (seconds > static_cast<double>(UINT32_MAX)) return UINT32_MAX;
-  return static_cast<uint32_t>(seconds);
-}
+// Shared with the inki PC tool, so both schedule a card for the same second.
+uint32_t intervalSeconds(float days) { return inki_interval_seconds(days); }
 
 bool ReviewSession::begin(const fsrs7::Config& config, const Limits& limits, const StudyDay& day, uint16_t newDoneToday,
                           uint16_t reviewsDoneToday) {

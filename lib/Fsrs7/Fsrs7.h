@@ -1,27 +1,22 @@
 #pragma once
 
-// FSRS-7 spaced-repetition scheduler for the e-reader firmware.
+// FSRS-7 spaced-repetition scheduling for flashcards.
 //
-// A port of the FSRS-7 scalar model from fsrs-rs v7.0.0 (BSD-3-Clause,
-// Open Spaced Repetition; see LICENSE-fsrs-rs). It uses single-precision
-// floats only, allocates nothing and keeps 12 bytes of state per card, so it
-// runs on the ESP32-C3 without a hardware FPU. Time is measured in
-// (fractional) days.
-//
-// Parameters are trained on a PC by the `inki params` command and stored on
-// the SD card in the text format read by parseConfig().
+// A C++ view of the Rust crate inki-core (in the inki repository, linked by
+// scripts/build_inki_core.py), which the inki PC tool uses too, so the PC
+// and the reader schedule cards with the same code. inki-core ports FSRS-7
+// from fsrs-rs v7.0.0 (BSD-3-Clause, Open Spaced Repetition). Floats only,
+// no allocation, 12 bytes of state per card. Time is in (fractional) days.
+
+#include <inki_core.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace fsrs7 {
 
-constexpr size_t kParamCount = 34;
-
-constexpr float kStabilityMin = 0.0001f;
-constexpr float kStabilityMax = 36500.0f;
-constexpr float kDifficultyMin = 1.0f;
-constexpr float kDifficultyMax = 10.0f;
+constexpr size_t kParamCount = INKI_PARAM_COUNT;
 constexpr float kDefaultDesiredRetention = 0.9f;
 
 enum class Rating : uint8_t { Again = 1, Hard = 2, Good = 3, Easy = 4 };
@@ -29,9 +24,6 @@ enum class Rating : uint8_t { Again = 1, Hard = 2, Good = 3, Easy = 4 };
 struct Params {
   float w[kParamCount];
 };
-
-// FSRS-7 defaults from fsrs-rs v7.0.0, used until the user trains their own.
-extern const Params kDefaultParams;
 
 // Memory state of one card. A card that has never been reviewed has no state;
 // use initialState() for its first review.
@@ -52,49 +44,98 @@ struct NextStates {
   ScheduledState good;
   ScheduledState easy;
 
-  const ScheduledState& forRating(Rating rating) const;
+  const ScheduledState& forRating(Rating rating) const {
+    switch (rating) {
+      case Rating::Again:
+        return again;
+      case Rating::Hard:
+        return hard;
+      case Rating::Easy:
+        return easy;
+      case Rating::Good:
+      default:
+        return good;
+    }
+  }
 };
 
-// Clamps parameters into the ranges fsrs-rs accepts. Non-finite values are
-// replaced by the lower bound, as fsrs-rs does.
-void clipParams(Params& params);
-
-// Returns true when every parameter is finite.
-bool paramsFinite(const Params& params);
-
-// Probability of recall after `elapsedDays` days.
-float retrievability(const Params& params, const MemoryState& state, float elapsedDays);
-
-// State after the first review of a new card.
-MemoryState initialState(const Params& params, Rating rating);
-
-// State after reviewing a card with `rating`, `elapsedDays` after its previous review.
-MemoryState nextState(const Params& params, const MemoryState& state, float elapsedDays, Rating rating);
-
-// Days until recall probability falls to `desiredRetention` (0.0001..0.9999).
-float nextIntervalDays(const Params& params, const MemoryState& state, float desiredRetention);
-
-// Outcome of each possible rating for a card that may be new (`current` == nullptr).
-NextStates nextStates(const Params& params, const MemoryState* current, float desiredRetention, float elapsedDays);
-
-// Settings read from the SD-card parameter file.
 struct Config {
   Params params;
   float desiredRetention;
 };
 
-// Parses the parameter file written by `inki params`:
-//
-//   # comment
-//   fsrs7 <34 comma-separated floats>
-//   desired_retention 0.9
-//
-// Unknown keys are ignored. Missing keys keep the defaults. Returns false if
-// a known key has a malformed value; `out` is then left unchanged. Parameters
-// are clipped before being stored.
-bool parseConfig(const char* text, size_t length, Config& out);
+namespace detail {
+inline InkiMemoryState toInki(const MemoryState& s) {
+  return InkiMemoryState{s.stability, s.difficulty, s.stabilityFast};
+}
+inline MemoryState fromInki(const InkiMemoryState& s) {
+  return MemoryState{s.stability, s.difficulty, s.stability_fast};
+}
+inline ScheduledState fromInki(const InkiScheduled& s) { return ScheduledState{fromInki(s.memory), s.interval_days}; }
+inline Config fromInki(const InkiConfig& c) {
+  Config out{};
+  std::memcpy(out.params.w, c.params, sizeof(out.params.w));
+  out.desiredRetention = c.desired_retention;
+  return out;
+}
+}  // namespace detail
 
-// Default config: kDefaultParams with kDefaultDesiredRetention.
-Config defaultConfig();
+// FSRS-7 defaults with 90% desired retention.
+inline Config defaultConfig() {
+  InkiConfig config{};
+  inki_default_config(&config);
+  return detail::fromInki(config);
+}
+
+// FSRS-7 defaults from fsrs-rs v7.0.0.
+inline const Params kDefaultParams = defaultConfig().params;
+
+// Parses the parameter file written by `inki` (fsrs7-params.txt). Keys
+// missing from the file get the defaults; parameters are clipped. Returns
+// false on a malformed value and leaves `out` unchanged.
+inline bool parseConfig(const char* text, size_t length, Config& out) {
+  InkiConfig config{};
+  if (!inki_parse_config(text, length, &config)) return false;
+  out = detail::fromInki(config);
+  return true;
+}
+
+// Probability of recall after `elapsedDays` days.
+inline float retrievability(const Params& params, const MemoryState& state, float elapsedDays) {
+  const InkiMemoryState s = detail::toInki(state);
+  return inki_retrievability(params.w, &s, elapsedDays);
+}
+
+// State after the first review of a new card.
+inline MemoryState initialState(const Params& params, Rating rating) {
+  InkiMemoryState out{};
+  inki_initial_state(params.w, static_cast<uint8_t>(rating), &out);
+  return detail::fromInki(out);
+}
+
+// State after reviewing a card with `rating`, `elapsedDays` after its previous review.
+inline MemoryState nextState(const Params& params, const MemoryState& state, float elapsedDays, Rating rating) {
+  const InkiMemoryState s = detail::toInki(state);
+  InkiMemoryState out{};
+  inki_next_state(params.w, &s, elapsedDays, static_cast<uint8_t>(rating), &out);
+  return detail::fromInki(out);
+}
+
+// Days until recall probability falls to `desiredRetention` (0.0001..0.9999).
+inline float nextIntervalDays(const Params& params, const MemoryState& state, float desiredRetention) {
+  const InkiMemoryState s = detail::toInki(state);
+  return inki_next_interval_days(params.w, &s, desiredRetention);
+}
+
+// Outcome of each possible rating for a card that may be new (`current` == nullptr).
+inline NextStates nextStates(const Params& params, const MemoryState* current, float desiredRetention,
+                             float elapsedDays) {
+  InkiMemoryState s{};
+  if (current != nullptr) s = detail::toInki(*current);
+  InkiNextStates out{};
+  inki_next_states(params.w, current != nullptr ? &s : nullptr, desiredRetention, elapsedDays, &out);
+  return NextStates{detail::fromInki(out.again), detail::fromInki(out.hard), detail::fromInki(out.good),
+                    detail::fromInki(out.easy)};
+}
 
 }  // namespace fsrs7
