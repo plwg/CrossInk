@@ -53,6 +53,7 @@ class HomeActivity final : public Activity {
   bool hasReadingStats = false;
   bool hasBookmarks = false;
   bool hasClippings = false;
+  bool hasFlashcards = false;
   bool hasPlugins = false;
   bool minimalMenuOpen = false;
   bool minimalSuppressInitialFrontRelease = false;
@@ -114,6 +115,7 @@ class HomeActivity final : public Activity {
   void onPluginsOpen();
   void onReadingStatsOpen();
   void onSavedItemsOpen();
+  void onFlashcardsOpen();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
