@@ -12,7 +12,7 @@ heavy for the ESP32-C3, so this PC tool does it from your Anki review history.
 |---|---|
 | `src/` | `inki` command-line tool (Rust) |
 | `firmware/lib/Fsrs7/` | FSRS-7 scheduler for the device (C++17, no allocation, floats only) |
-| `crossink/` | CrossInk firmware fork with the flashcard screens (separate repo) |
+| `../crossink-flashcards/` | CrossInk firmware fork with the flashcard screens (separate repo, alongside this one) |
 | `crates/fsrs7-device-check/` | Builds the C++ library on the PC and tests it against fsrs-rs |
 | `WISHLIST.md` | RWKV-Instant / RWKV-Curve plans |
 
@@ -63,16 +63,16 @@ documented in the firmware fork's `docs/flashcards.md`.
 
 ## Firmware
 
-The CrossInk fork with the flashcard screens is in `crossink/` (branch
-`feat/flashcards`, its own git repository, ignored here). Build it for the
-X3/X4 with:
+The CrossInk fork with the flashcard screens is its own repository,
+alongside this one in `../crossink-flashcards` (branch `feat/flashcards`).
+Build it for the X3/X4 with:
 
 ```sh
-cd crossink && pio run -e default
+cd ../crossink-flashcards && pio run -e default
 ```
 
-The firmware is written to `crossink/.pio/build/default/firmware-x3-x4.bin`.
-Use pioarduino's PlatformIO Core 6.1.19, as CrossInk's CI does; PlatformIO
+The firmware is written to `.pio/build/default/firmware-x3-x4.bin` in that
+repository. Use pioarduino's PlatformIO Core 6.1.19, as CrossInk's CI does; PlatformIO
 6.2 cannot build it.
 
 ## Preview scheduling
