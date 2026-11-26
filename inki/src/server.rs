@@ -367,6 +367,8 @@ struct NewDeckSummary {
     studied: usize,
     suspended: usize,
     settings: SettingsSummary,
+    /// Has Chinese or Japanese text: the reader needs the CJK font pack.
+    needs_cjk_font: bool,
 }
 
 async fn post_deck(
@@ -404,6 +406,7 @@ async fn post_deck(
                 studied: deck.studied(),
                 suspended: deck.suspended,
                 settings: SettingsSummary::of(&deck_settings),
+                needs_cjk_font: file.needs_cjk_font(),
             },
         ))
     })
@@ -423,6 +426,7 @@ struct DeckInfo {
     studied: usize,
     answers: usize,
     settings: SettingsSummary,
+    needs_cjk_font: bool,
 }
 
 /// Reads a deck file (multipart field `deck`) to show what it holds.
@@ -444,6 +448,7 @@ async fn post_inspect(mut multipart: Multipart) -> ApiResult<DeckInfo> {
         studied: deck.studied(),
         answers: deck.answers(),
         settings: SettingsSummary::of(&deck.settings),
+        needs_cjk_font: deck.needs_cjk_font(),
     }))
 }
 
@@ -454,6 +459,7 @@ struct UpdateResult {
     /// What the Anki export changed; absent when only settings changed.
     from_anki: Option<UpdateSummary>,
     settings: SettingsSummary,
+    needs_cjk_font: bool,
 }
 
 /// Multipart fields: `deck` (the .inki file); optionally `anki` (upload id)
@@ -517,6 +523,7 @@ async fn post_update(
             cards: updated.cards.len(),
             from_anki,
             settings: SettingsSummary::of(&updated.settings),
+            needs_cjk_font: updated.needs_cjk_font(),
         };
         // Same name as the reader's file, so copying it back replaces it.
         Ok((deck_name, updated.encode()?, summary))

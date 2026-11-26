@@ -666,6 +666,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   char dictionarySdFontFamilyName[64] = "";
   // Zero follows the active reader size.
   uint8_t dictionaryFontPointSize = 0;
+  // SD-card font for flashcards, e.g. a CJK font (empty = use the reader font).
+  char flashcardSdFontFamilyName[64] = "";
   uint8_t pluginsEnabled = 0;
   uint8_t pluginHubPromptHidden = 0;
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)

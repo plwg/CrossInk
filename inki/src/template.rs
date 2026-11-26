@@ -142,8 +142,9 @@ fn replacement(tag: &str, ctx: &RenderContext, question: bool, front_side: &str)
             "text" => html_to_text(&text),
             // Typing answers is not possible on the device; hints are shown.
             "type" | "cloze-only" => String::new(),
-            "furigana" | "kana" => strip_ruby(&text, true),
-            "kanji" => strip_ruby(&text, false),
+            "furigana" => strip_ruby(&text, Ruby::Both),
+            "kana" => strip_ruby(&text, Ruby::Reading),
+            "kanji" => strip_ruby(&text, Ruby::Base),
             _ => text,
         };
     }
@@ -220,15 +221,34 @@ fn render_cloze(text: &str, active: u32, question: bool) -> String {
     out
 }
 
-/// Anki furigana syntax `漢字[かんじ]`: keep the reading or the base text.
-fn strip_ruby(text: &str, keep_reading: bool) -> String {
+/// What to keep of a ruby annotation such as `漢字[かんじ]` or `你[nǐ]`.
+#[derive(Clone, Copy)]
+enum Ruby {
+    /// `漢字(かんじ)`: e-ink cannot set the reading above, so it follows.
+    Both,
+    Reading,
+    Base,
+}
+
+/// Anki furigana syntax `漢字[かんじ]`, as the `furigana:`, `kana:` and
+/// `kanji:` filters show it.
+fn strip_ruby(text: &str, keep: Ruby) -> String {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
     let mut base = String::new();
     while let Some(c) = chars.next() {
         if c == '[' {
             let reading: String = chars.by_ref().take_while(|&c| c != ']').collect();
-            out.push_str(if keep_reading { &reading } else { &base });
+            match keep {
+                Ruby::Both => {
+                    out.push_str(&base);
+                    out.push('(');
+                    out.push_str(&reading);
+                    out.push(')');
+                }
+                Ruby::Reading => out.push_str(&reading),
+                Ruby::Base => out.push_str(&base),
+            }
             base.clear();
         } else if c == ' ' {
             out.push_str(&base);
@@ -271,7 +291,8 @@ pub fn html_to_text(html: &str) -> String {
             .take_while(|c| c.is_ascii_alphanumeric())
             .collect();
         match name.as_str() {
-            "style" | "script" if !tag.starts_with('/') => {
+            // <rp> holds fallback parentheses; <rt> gets its own below.
+            "style" | "script" | "rp" if !tag.starts_with('/') => {
                 let end_tag = format!("</{name}");
                 let lower = rest.to_ascii_lowercase();
                 rest = lower
@@ -283,6 +304,8 @@ pub fn html_to_text(html: &str) -> String {
             | "ol" | "table" => text.push('\n'),
             "li" if !tag.starts_with('/') => text.push_str("\n• "),
             "img" => text.push_str("[image]"),
+            // Ruby text (pinyin, furigana) follows its base in parentheses.
+            "rt" => text.push(if tag.starts_with('/') { ')' } else { '(' }),
             "td" | "th" if !tag.starts_with('/') => text.push(' '),
             _ => {}
         }
@@ -451,6 +474,29 @@ mod tests {
         let f = fields(&[("W", "日本[にほん] 語[ご]")]);
         assert_eq!(card("{{kana:W}}", "", &f, 0, false).front, "にほんご");
         assert_eq!(card("{{kanji:W}}", "", &f, 0, false).front, "日本語");
+        assert_eq!(
+            card("{{furigana:W}}", "", &f, 0, false).front,
+            "日本(にほん)語(ご)"
+        );
+        let zh = fields(&[("W", "你[nǐ]好[hǎo]")]);
+        assert_eq!(
+            card("{{furigana:W}}", "", &zh, 0, false).front,
+            "你(nǐ)好(hǎo)"
+        );
+    }
+
+    #[test]
+    fn html_ruby_and_chinese_text() {
+        assert_eq!(
+            html_to_text(
+                "<ruby>你<rp>(</rp><rt>nǐ</rt><rp>)</rp></ruby><ruby>好<rt>hǎo</rt></ruby>"
+            ),
+            "你(nǐ)好(hǎo)"
+        );
+        assert_eq!(
+            html_to_text("学习&nbsp;中文，<br>Learn Chinese。"),
+            "学习 中文，\nLearn Chinese。"
+        );
     }
 
     #[test]

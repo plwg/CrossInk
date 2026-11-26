@@ -99,6 +99,43 @@
 				</div>
 				<div id="update-result"></div>
 			</section>
+
+			<section class="panel" id="cjk-panel">
+				<div class="panel-head">
+					<h2><span class="step">5</span>Chinese and Japanese cards <span class="optional">once</span></h2>
+					<span id="cjk-state" class="pill"></span>
+				</div>
+				<p class="lead">
+					The reader's built-in fonts show English and other Latin-script languages (pinyin tone
+					marks too) and Cyrillic, but not Chinese characters or Japanese kana. Put this font on
+					the SD card once and every deck can use it; your books keep their own font.
+				</p>
+				<div class="actions">
+					<a class="button primary" href="https://github.com/plwg/CrossInk/releases/download/fonts-noto-sans-cjk-sc-1/noto-sans-cjk-sc-cpfont.zip">Download Noto Sans CJK SC (10 MB)</a>
+				</div>
+				<ol class="guide">
+					<li>Put the reader's SD card in your computer and open the downloaded zip.</li>
+					<li>
+						Copy the <b>Noto Sans CJK SC</b> folder (the whole folder, not the files inside it) into
+						the <code>fonts</code> folder at the top of the SD card. Create <code>fonts</code> if it
+						isn't there. The other two files in the zip stay on your computer.
+					</li>
+					<li>
+						Check the card has
+						<code>fonts/Noto Sans CJK SC/Noto Sans CJK SC_14.cpfont</code>, and the same with
+						<code>_12</code>, <code>_16</code> and <code>_18</code>.
+					</li>
+					<li>
+						Put the card back and turn the reader on. Open
+						<b>Settings › Reader › Font Options › Flashcard Font</b> and choose
+						<b>Noto Sans CJK SC</b>.
+					</li>
+				</ol>
+				<p class="hint">
+					Korean is not included. The font is Noto Sans CJK by Adobe and Google, under the SIL Open
+					Font License; the zip includes the licence.
+				</p>
+			</section>
 		</main>
 
 		<script src="/app.js" type="module"></script>

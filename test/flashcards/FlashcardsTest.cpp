@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "FlashcardFormat.h"
+#include "LineBreak.h"
 #include "ReviewSession.h"
 
 using flashcards::CardIndexEntry;
@@ -416,4 +417,58 @@ TEST_F(SessionTest, LoadsAtMostTheSessionCaps) {
   session.finishLoading();
   EXPECT_EQ(Limits{}.maxSessionNew, session.newCount());
   EXPECT_EQ(Limits{}.maxSessionReviews, session.dueCount());
+}
+
+namespace {
+
+// Every character (not byte) is 10 pixels wide.
+int measureChars(void*, const char* text, size_t length) {
+  int chars = 0;
+  for (size_t i = 0; i < length; ++i) {
+    if ((static_cast<uint8_t>(text[i]) & 0xC0) != 0x80) ++chars;
+  }
+  return chars * 10;
+}
+
+// Lines of `text` at `chars` characters wide.
+std::vector<std::string> lines(const std::string& text, int chars) {
+  std::vector<std::string> out;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    const flashcards::LineSpan span =
+        flashcards::breakLine(text.data() + pos, text.size() - pos, chars * 10, measureChars, nullptr);
+    out.emplace_back(text, pos, span.length);
+    pos += span.next;
+  }
+  return out;
+}
+
+using Lines = std::vector<std::string>;
+
+}  // namespace
+
+TEST(LineBreak, WrapsEnglishAtSpaces) {
+  EXPECT_EQ((Lines{"the quick", "brown fox", "jumps"}), lines("the quick brown fox jumps", 10));
+  EXPECT_EQ((Lines{"fits"}), lines("fits  ", 10)) << "trailing spaces dropped";
+}
+
+TEST(LineBreak, WrapsChineseBetweenCharacters) {
+  EXPECT_EQ((Lines{"我喜欢学习", "中文"}), lines("我喜欢学习中文", 5));
+  // Closing punctuation never starts a line: 。 takes 文 with it.
+  EXPECT_EQ((Lines{"我喜欢学习中", "文。"}), lines("我喜欢学习中文。", 7));
+  // Opening punctuation never ends a line: 「 goes with 你.
+  EXPECT_EQ((Lines{"他说", "「你", "好」"}), lines("他说「你好」", 3));
+}
+
+TEST(LineBreak, MixesChineseAndEnglish) {
+  EXPECT_EQ((Lines{"apple 苹果", "是水果"}), lines("apple 苹果是水果", 8));
+  EXPECT_EQ((Lines{"学习", "English", "很有趣"}), lines("学习English很有趣", 7));
+}
+
+TEST(LineBreak, SplitsWordsWiderThanTheLine) {
+  EXPECT_EQ((Lines{"abcde", "fghij", "kl"}), lines("abcdefghijkl", 5));
+  EXPECT_EQ((Lines{"a"}), lines("a", 0)) << "always makes progress";
+  EXPECT_TRUE(flashcards::isCjk(0x4E2D));   // 中
+  EXPECT_TRUE(flashcards::isCjk(0xFF0C));   // ，
+  EXPECT_FALSE(flashcards::isCjk(0x00E9));  // é
 }

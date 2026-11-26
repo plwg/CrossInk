@@ -11,20 +11,33 @@
 #include <utility>
 #include <vector>
 
+#include "CrossPointSettings.h"
+#include "LineBreak.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "components/CompactHeader.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
 constexpr char TAG[] = "FLC";
-constexpr int FRONT_FONT_ID = BITTER_16_FONT_ID;
-constexpr int BACK_FONT_ID = BITTER_14_FONT_ID;
 constexpr int STATUS_FONT_ID = SMALL_FONT_ID;
 // Holding Back this long leaves the session without answering the card.
 constexpr unsigned long EXIT_HOLD_MS = 1000;
 // Anki also caps recorded answer time; longer usually means the reader walked away.
 constexpr unsigned long MAX_ANSWER_MS = 60UL * 60UL * 1000UL;
+
+struct MeasureContext {
+  const GfxRenderer* renderer;
+  int fontId;
+  std::string buffer;
+};
+
+int measureText(void* context, const char* text, size_t length) {
+  auto* c = static_cast<MeasureContext*>(context);
+  c->buffer.assign(text, length);
+  return c->renderer->getTextWidth(c->fontId, c->buffer.c_str());
+}
 }  // namespace
 
 FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -33,6 +46,20 @@ FlashcardReviewActivity::FlashcardReviewActivity(GfxRenderer& renderer, MappedIn
 
 void FlashcardReviewActivity::onEnter() {
   Activity::onEnter();
+  // Cards use the Flashcard Font (e.g. a Chinese font pack) when one is set,
+  // swapped in the way the dictionary swaps in its font; otherwise the
+  // reading font, loaded as the book readers do.
+  usingFlashcardFont = false;
+  if (SETTINGS.flashcardSdFontFamilyName[0] != '\0') {
+    const DictionaryFontActivation font =
+        sdFontSystem.activateDictionaryFont(renderer, SETTINGS.flashcardSdFontFamilyName);
+    cardFontId = font.fontId;
+    usingFlashcardFont = font.usingDictionaryFont;
+    if (!usingFlashcardFont) LOG_ERR(TAG, "Flashcard font %s unavailable", SETTINGS.flashcardSdFontFamilyName);
+  } else {
+    sdFontSystem.ensureLoaded(renderer);
+    cardFontId = SETTINGS.getReaderFontId();
+  }
   phase = Phase::Error;
   errorText = tr(STR_FLASHCARDS_DECK_FAILED);
   saveFailed = false;
@@ -76,6 +103,10 @@ void FlashcardReviewActivity::onEnter() {
 void FlashcardReviewActivity::onExit() {
   session.clear();
   cardText.reset();
+  if (usingFlashcardFont) {
+    sdFontSystem.restoreReaderFont(renderer);
+    usingFlashcardFont = false;
+  }
   Activity::onExit();
 }
 
@@ -191,7 +222,8 @@ void FlashcardReviewActivity::formatInterval(const float days, char* buf, const 
   }
 }
 
-// Draws word-wrapped text between top and bottom; '\n' starts a new line.
+// Draws wrapped text between top and bottom; '\n' starts a new line. Lines
+// break at spaces and between Chinese/Japanese/Korean characters.
 // Returns the y just below the last line drawn.
 int FlashcardReviewActivity::drawText(const char* text, const size_t length, const int fontId, const int top,
                                       const int bottom, const bool center) const {
@@ -202,17 +234,25 @@ int FlashcardReviewActivity::drawText(const char* text, const size_t length, con
   const int maxLines = lineHeight > 0 ? (bottom - top) / lineHeight : 0;
   if (maxLines <= 0 || width <= 0) return top;
 
+  MeasureContext measure{&renderer, fontId, {}};
   std::vector<std::string> lines;
   size_t start = 0;
   while (start <= length && static_cast<int>(lines.size()) < maxLines) {
     const char* nl = static_cast<const char*>(memchr(text + start, '\n', length - start));
     const size_t end = nl ? static_cast<size_t>(nl - text) : length;
-    const std::string paragraph(text + start, end - start);
-    if (paragraph.empty()) {
-      lines.emplace_back();
-    } else {
-      auto wrapped = renderer.wrappedText(fontId, paragraph.c_str(), width, maxLines - static_cast<int>(lines.size()));
-      for (auto& line : wrapped) lines.push_back(std::move(line));
+    if (end == start) lines.emplace_back();
+    size_t pos = start;
+    while (pos < end && static_cast<int>(lines.size()) < maxLines) {
+      const flashcards::LineSpan span = flashcards::breakLine(text + pos, end - pos, width, measureText, &measure);
+      const bool more = pos + span.next < end || nl != nullptr;
+      if (more && static_cast<int>(lines.size()) == maxLines - 1) {
+        // Last line with text left over: end it with an ellipsis.
+        const std::string rest(text + pos, end - pos);
+        lines.push_back(renderer.truncatedText(fontId, rest.c_str(), width));
+        break;
+      }
+      lines.emplace_back(text + pos, span.length);
+      pos += span.next;
     }
     if (!nl) break;
     start = end + 1;
@@ -280,7 +320,7 @@ void FlashcardReviewActivity::render(RenderLock&&) {
       size_t backLength = 0;
       const char* back = nullptr;
       flashcards::splitCardText(cardText.get(), cardLength, frontLength, back, backLength);
-      drawText(cardText.get(), frontLength, FRONT_FONT_ID, top, bottom, true);
+      drawText(cardText.get(), frontLength, cardFontId, top, bottom, true);
       labels[0] = tr(STR_EXIT);
       labels[1] = tr(STR_FLASHCARDS_SHOW);
       break;
@@ -293,10 +333,10 @@ void FlashcardReviewActivity::render(RenderLock&&) {
       flashcards::splitCardText(cardText.get(), cardLength, frontLength, back, backLength);
       // The question keeps at most 40% of the space; the answer gets the rest.
       const int frontBottom = top + (bottom - top) * 2 / 5;
-      const int afterFront = drawText(cardText.get(), frontLength, BACK_FONT_ID, top, frontBottom, false);
+      const int afterFront = drawText(cardText.get(), frontLength, cardFontId, top, frontBottom, false);
       const int divider = afterFront + metrics.verticalSpacing;
       renderer.drawLine(metrics.contentSidePadding, divider, screenWidth - metrics.contentSidePadding, divider);
-      drawText(back, backLength, FRONT_FONT_ID, divider + metrics.verticalSpacing, bottom, false);
+      drawText(back, backLength, cardFontId, divider + metrics.verticalSpacing, bottom, false);
 
       const StrId names[4] = {StrId::STR_FLASHCARDS_AGAIN, StrId::STR_FLASHCARDS_HARD, StrId::STR_FLASHCARDS_GOOD,
                               StrId::STR_FLASHCARDS_EASY};

@@ -539,6 +539,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (sdFontFamilyName[0] != '\0') doc["sdFontFamilyName"] = sdFontFamilyName;
   if (dictionarySdFontFamilyName[0] != '\0') doc["dictionaryFont"] = dictionarySdFontFamilyName;
   doc["dictionaryFontSize"] = dictionaryFontPointSize;
+  if (flashcardSdFontFamilyName[0] != '\0') doc["flashcardFont"] = flashcardSdFontFamilyName;
   JsonArray quickActionSlotsJson = doc["quickActionSlots"].to<JsonArray>();
   for (const uint8_t action : quickActionSlots) {
     quickActionSlotsJson.add(action);
@@ -976,6 +977,9 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc, bool importingCrossPoint
   strncpy(dictionarySdFontFamilyName, dictionaryFamily, sizeof(dictionarySdFontFamilyName) - 1);
   dictionarySdFontFamilyName[sizeof(dictionarySdFontFamilyName) - 1] = '\0';
   dictionaryFontPointSize = doc["dictionaryFontSize"] | static_cast<uint8_t>(0);
+  const char* flashcardFamily = doc["flashcardFont"] | "";
+  strncpy(flashcardSdFontFamilyName, flashcardFamily, sizeof(flashcardSdFontFamilyName) - 1);
+  flashcardSdFontFamilyName[sizeof(flashcardSdFontFamilyName) - 1] = '\0';
   const JsonArrayConst quickActionSlotsJson = doc["quickActionSlots"].as<JsonArrayConst>();
   if (!quickActionSlotsJson.isNull()) {
     for (size_t i = 0; i < std::size(quickActionSlots); ++i) {

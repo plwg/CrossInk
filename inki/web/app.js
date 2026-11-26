@@ -261,8 +261,22 @@ async function downloadDeck(button, name) {
 			(s.suspended
 				? `, ${plural(s.suspended, "suspended card")} left out`
 				: "") +
-			`; ${describeSettings(s.settings)}. Copy it into the flashcards folder on the SD card.`,
+			`; ${describeSettings(s.settings)}. Copy it into the flashcards folder on the SD card.` +
+			cjkNote(s),
 	);
+	markCjk(s);
+}
+
+/** A reminder that Chinese or Japanese cards need the font from step 5. */
+const cjkNote = (summary) =>
+	summary.needs_cjk_font
+		? " It has Chinese or Japanese text: the reader needs the font from step 5 (once)."
+		: "";
+
+function markCjk(summary) {
+	if (!summary.needs_cjk_font) return;
+	$("cjk-state").textContent = "Needed for your decks";
+	$("cjk-state").className = "pill warn";
 }
 
 function renderDecks() {
@@ -408,7 +422,8 @@ $("deck-file").addEventListener("change", async () => {
 	const d = state.deck;
 	$("deck-info").textContent =
 		`“${d.anki_deck}”: ${plural(d.cards, "card")}, ${d.studied.toLocaleString()} studied, ` +
-		`${plural(d.answers, "answer")} given on the reader.`;
+		`${plural(d.answers, "answer")} given on the reader.${cjkNote(d)}`;
+	markCjk(d);
 	settingsFields($("update-settings"), "update", d.settings);
 	refreshParamsChoice();
 	$("update-form").hidden = false;
@@ -443,6 +458,7 @@ $("update").addEventListener("click", async () => {
 			);
 	}
 	parts.push(describeSettings(s.settings));
+	markCjk(s);
 	$("update-result").replaceChildren(
 		el(
 			"div",
@@ -452,7 +468,7 @@ $("update").addEventListener("click", async () => {
 			}),
 			el("p", {
 				className: "hint",
-				text: `${parts.join(" · ")}. Copy it back over the old file.`,
+				text: `${parts.join(" · ")}. Copy it back over the old file.${cjkNote(s)}`,
 			}),
 		),
 	);

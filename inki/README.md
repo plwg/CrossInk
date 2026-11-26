@@ -52,6 +52,10 @@ refuses requests from other sites.
    downloaded file back over the old one. Progress made on the reader is
    kept.
 
+5. **Chinese and Japanese cards:** download the Noto Sans CJK SC font pack
+   and follow the guide to put it on the SD card and pick it as the reader's
+   **Flashcard Font**. The app reminds you when a deck has such text.
+
 Cards are rendered from your Anki templates as plain text; images show as
 `[image]`, sound is dropped, suspended cards are left out. Progress made in
 Anki carries over to new decks through FSRS-7.

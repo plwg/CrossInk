@@ -19,6 +19,7 @@ add_executable(FlashcardsTest
   FlashcardsTest.cpp
   ${REPO_ROOT}/lib/Flashcards/FlashcardFormat.cpp
   ${REPO_ROOT}/lib/Flashcards/ReviewSession.cpp
+  ${REPO_ROOT}/lib/Flashcards/LineBreak.cpp
 )
 
 target_include_directories(FlashcardsTest PRIVATE

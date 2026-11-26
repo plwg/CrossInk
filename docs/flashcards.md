@@ -65,8 +65,35 @@ New cards come in deck order or a fixed random order, after the reviews or
 mixed evenly among them, as set for the deck in `inki`. A session loads at
 most 300 reviews and 100 new cards; open the deck again for more.
 
-Only text is shown. Formatting, images (shown as `[image]`), sound and
-type-in answers are not available on e-ink.
+Only text is shown, in your reading font and size, so cards look like your
+books. Formatting, images (shown as `[image]`), sound and type-in answers are
+not available on e-ink. Readings such as pinyin or furigana follow their
+characters in parentheses: 你(nǐ)好(hǎo).
+
+### Chinese and Japanese cards
+
+The built-in fonts cover English and other Latin-script languages (including
+Vietnamese and pinyin tone marks) and Cyrillic, but not Chinese characters or
+Japanese kana. For those, install the Noto Sans CJK SC font once:
+
+1. Download `noto-sans-cjk-sc-cpfont.zip` (10 MB) from step 5 of the inki web
+   app, or from the
+   [font release](https://github.com/plwg/CrossInk/releases/tag/fonts-noto-sans-cjk-sc-1).
+2. Put the SD card in your computer and open the zip. Copy the
+   **Noto Sans CJK SC** folder (the whole folder) into the `fonts` folder at the
+   top of the card; create `fonts` if it is missing. The card then has
+   `fonts/Noto Sans CJK SC/Noto Sans CJK SC_14.cpfont`, and the same with `_12`,
+   `_16` and `_18`.
+3. On the reader, open **Settings > Reader > Font Options > Flashcard Font** and
+   choose **Noto Sans CJK SC**.
+
+Cards then use that font; books keep the reading font. **Flashcard Font**
+appears once the card has at least one SD font, and **Use Reader Font** turns
+it off. The size follows your reading font size (the closest of 12-18).
+
+Chinese and Japanese lines break between characters, keeping punctuation such
+as ，。」 off the start of a line. The font has no Korean; Greek and
+right-to-left scripts are not supported on cards yet.
 
 ## Building
 

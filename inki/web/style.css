@@ -213,6 +213,15 @@ button:hover:not(:disabled) {
 	border-color: var(--muted);
 }
 
+a.button {
+	display: inline-block;
+	font-weight: 600;
+	padding: 7px 14px;
+	border-radius: 8px;
+	text-decoration: none;
+}
+
+a.button.primary,
 button.primary {
 	background: var(--accent);
 	border-color: var(--accent);
@@ -417,4 +426,14 @@ button:not(:disabled):focus-visible {
 
 select {
 	font-family: inherit;
+}
+
+.guide {
+	margin: 16px 0;
+	padding-left: 22px;
+	max-width: 70ch;
+}
+
+.guide li {
+	margin: 6px 0;
 }

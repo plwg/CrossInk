@@ -66,6 +66,14 @@ impl DeckFile {
         self.answer_log.len() / LOG_ENTRY_SIZE
     }
 
+    /// Whether any card has Chinese characters or Japanese kana, which the
+    /// reader's built-in fonts lack: it needs the CJK font pack.
+    pub fn needs_cjk_font(&self) -> bool {
+        self.cards
+            .iter()
+            .any(|c| c.front.chars().chain(c.back.chars()).any(is_han_or_kana))
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         let name = truncate(&self.anki_deck, MAX_NAME);
         let texts: Vec<Vec<u8>> = self.cards.iter().map(card_text).collect();
@@ -162,6 +170,17 @@ impl DeckFile {
             answer_log: bytes[h.log_offset as usize..log_end].to_vec(),
         })
     }
+}
+
+/// Han characters, kana and CJK punctuation: what the CJK font pack adds.
+pub fn is_han_or_kana(c: char) -> bool {
+    matches!(u32::from(c),
+        0x3000..=0x30FF       // CJK punctuation, hiragana, katakana
+        | 0x3400..=0x4DBF     // CJK extension A
+        | 0x4E00..=0x9FFF     // CJK unified ideographs
+        | 0xF900..=0xFAFF     // compatibility ideographs
+        | 0xFF00..=0xFFEF     // full-width forms
+        | 0x20000..=0x3FFFF) // CJK extensions B and later
 }
 
 /// Cuts `text` to at most `max` bytes on a character boundary, marking the cut.
@@ -312,6 +331,15 @@ mod tests {
             },
             deck()
         );
+    }
+
+    #[test]
+    fn detects_chinese_text() {
+        let mut d = deck();
+        assert!(!d.needs_cjk_font(), "German and English only");
+        d.cards[1].back = "狗 (gǒu)".into();
+        assert!(d.needs_cjk_font());
+        assert!(is_han_or_kana('か') && is_han_or_kana('，') && !is_han_or_kana('ǒ'));
     }
 
     #[test]

@@ -40,6 +40,8 @@ class FlashcardReviewActivity final : public Activity {
   uint64_t ankiCardId = 0;
   Phase phase = Phase::Error;
   const char* errorText = nullptr;
+  int cardFontId = 0;               // set on enter
+  bool usingFlashcardFont = false;  // restore the reader font on exit
   bool saveFailed = false;
   uint32_t enterTime = 0;
   unsigned long enterMillis = 0;

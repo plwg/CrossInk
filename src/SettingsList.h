@@ -272,6 +272,45 @@ inline SettingInfo buildDictionaryFontFamilySetting(const SdCardFontRegistry* re
   return s;
 }
 
+// Font for flashcards, e.g. a Chinese/Japanese/Korean font pack, so cards can
+// use it while books keep the reading font.
+inline SettingInfo buildFlashcardFontSetting(const SdCardFontRegistry* registry) {
+  SettingInfo s;
+  s.nameId = StrId::STR_FLASHCARD_FONT;
+  s.type = SettingType::ENUM;
+  s.key = "flashcardFont";
+  s.category = StrId::STR_CAT_READER;
+  s.enumStringValues.push_back(I18N.get(StrId::STR_USE_READER_FONT));
+
+  std::vector<std::string> familyNames;
+  if (registry) {
+    const auto& families = registry->getFamilies();
+    familyNames.reserve(families.size());
+    s.enumStringValues.reserve(families.size() + 1);
+    for (const auto& family : families) {
+      familyNames.push_back(family.name);
+      s.enumStringValues.push_back(family.name);
+    }
+  }
+
+  s.valueGetter = [familyNames]() -> uint8_t {
+    for (size_t i = 0; i < familyNames.size(); ++i) {
+      if (familyNames[i] == SETTINGS.flashcardSdFontFamilyName) return static_cast<uint8_t>(i + 1);
+    }
+    return 0;
+  };
+  s.valueSetter = [familyNames](const uint8_t value) {
+    if (value == 0 || value > familyNames.size()) {
+      SETTINGS.flashcardSdFontFamilyName[0] = '\0';
+      return;
+    }
+    strncpy(SETTINGS.flashcardSdFontFamilyName, familyNames[value - 1].c_str(),
+            sizeof(SETTINGS.flashcardSdFontFamilyName) - 1);
+    SETTINGS.flashcardSdFontFamilyName[sizeof(SETTINGS.flashcardSdFontFamilyName) - 1] = '\0';
+  };
+  return s;
+}
+
 inline SettingInfo buildDictionaryFontSizeSetting(const SdCardFontRegistry* registry) {
   SettingInfo s;
   s.nameId = StrId::STR_DICTIONARY_FONT_SIZE;
@@ -806,6 +845,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     if (fontSizeIt != v.end()) {
       *fontSizeIt = buildFontSizeSetting(registry);
     }
+    v.push_back(buildFlashcardFontSetting(registry));
   }
   if (dictRegistry) {
     if (dictRegistry->count() > 0) {
@@ -865,6 +905,7 @@ inline std::vector<SettingInfo> buildReaderFontSettingsList(const std::vector<Se
   addSettingByName(settings, allSettings, StrId::STR_PUBLISHER_FONTS);
   addSettingByName(settings, allSettings, StrId::STR_DICTIONARY_FONT);
   addSettingByName(settings, allSettings, StrId::STR_DICTIONARY_FONT_SIZE);
+  addSettingByName(settings, allSettings, StrId::STR_FLASHCARD_FONT);
   addSettingByName(settings, allSettings, StrId::STR_LINE_SPACING);
   addSettingByName(settings, allSettings, StrId::STR_WORD_SPACING);
   addSettingByName(settings, allSettings, StrId::STR_CHARACTER_SPACING);

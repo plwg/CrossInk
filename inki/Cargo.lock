@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "inki"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -560,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "inki-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fsrs",
  "libm",
