@@ -4,8 +4,9 @@
 
 use anyhow::{Context, Result, ensure};
 use inki_core::format::{
-    CardIndexEntry, DeckHeader, HEADER_SIZE, INDEX_ENTRY_SIZE, MAX_CARD_TEXT,
-    REVIEW_LOG_ENTRY_SIZE as LOG_ENTRY_SIZE, STATE_RECORD_SIZE, StateRecord, split_card_text,
+    CardIndexEntry, DeckHeader, DeckSettings, HEADER_SIZE, INDEX_ENTRY_SIZE, MAX_CARD_TEXT,
+    REVIEW_LOG_ENTRY_SIZE as LOG_ENTRY_SIZE, SETTINGS_SIZE, STATE_RECORD_SIZE, StateRecord,
+    VERSION, split_card_text,
 };
 use inki_core::fsrs7::MemoryState;
 
@@ -46,6 +47,7 @@ impl From<StateRecord> for CardState {
 pub struct DeckFile {
     /// The Anki deck the file was made from, e.g. `Languages::German`.
     pub anki_deck: String,
+    pub settings: DeckSettings,
     pub cards: Vec<ExportCard>,
     /// Answers given on the reader (raw 32-byte entries). Kept when a deck is
     /// updated so the reader's daily limits still count them.
@@ -68,7 +70,7 @@ impl DeckFile {
         let name = truncate(&self.anki_deck, MAX_NAME);
         let texts: Vec<Vec<u8>> = self.cards.iter().map(card_text).collect();
         let count = self.cards.len();
-        let index_offset = HEADER_SIZE + name.len();
+        let index_offset = HEADER_SIZE + SETTINGS_SIZE + name.len();
         let text_start = index_offset + count * INDEX_ENTRY_SIZE;
         let text_len: usize = texts.iter().map(Vec::len).sum();
         // Records start on a 4-byte boundary.
@@ -82,9 +84,11 @@ impl DeckFile {
             state_offset: u32_of(state_offset)?,
             log_offset: u32_of(log_offset)?,
             name_length: name.len() as u16,
+            version: VERSION,
         };
         let mut out = Vec::with_capacity(log_offset + self.answer_log.len());
         out.extend_from_slice(&header.encode());
+        out.extend_from_slice(&self.settings.encode());
         out.extend_from_slice(name.as_bytes());
         let mut offset = text_start;
         for (card, text) in self.cards.iter().zip(&texts) {
@@ -119,8 +123,16 @@ impl DeckFile {
         );
         let h = DeckHeader::decode(header_bytes, bytes.len() as u64)
             .context("the deck file is damaged or from a newer version of inki")?;
-        let name_end = HEADER_SIZE + usize::from(h.name_length);
-        let anki_deck = String::from_utf8_lossy(&bytes[HEADER_SIZE..name_end]).into_owned();
+        // Version 1 decks have no settings and get the defaults.
+        let settings = h
+            .settings_offset()
+            .map_or_else(DeckSettings::default, |at| {
+                let at = at as usize;
+                DeckSettings::decode(bytes[at..at + SETTINGS_SIZE].try_into().expect("size"))
+            });
+        let name_start = h.name_offset() as usize;
+        let name_end = name_start + usize::from(h.name_length);
+        let anki_deck = String::from_utf8_lossy(&bytes[name_start..name_end]).into_owned();
 
         let cards = (0..h.card_count as usize)
             .map(|i| {
@@ -145,6 +157,7 @@ impl DeckFile {
         let log_end = h.review_log_append_offset(bytes.len() as u64) as usize;
         Ok(Self {
             anki_deck,
+            settings,
             cards,
             answer_log: bytes[h.log_offset as usize..log_end].to_vec(),
         })
@@ -208,8 +221,14 @@ mod tests {
     }
 
     fn deck() -> DeckFile {
+        let mut settings = DeckSettings {
+            new_per_day: 7,
+            ..Default::default()
+        };
+        settings.params[0] = 0.5;
         DeckFile {
             anki_deck: "Languages::German".into(),
+            settings,
             cards: vec![card(7, "Hund", "dog", 1000), card(9, "é", "", 0)],
             answer_log: vec![1; 64],
         }
@@ -228,12 +247,16 @@ mod tests {
     fn layout_matches_the_firmware() {
         let bytes = deck().encode().unwrap();
         assert_eq!(&bytes[..4], b"INKD");
-        assert_eq!(u16_at(&bytes, 4), 1);
+        assert_eq!(u16_at(&bytes, 4), 2);
         assert_eq!(u32_at(&bytes, 8), 2);
+        assert_eq!(u16_at(&bytes, 32), 7, "new cards per day");
+        assert_eq!(u16_at(&bytes, 34), 200, "reviews per day");
+        assert_eq!(&bytes[36..40], &0.9f32.to_le_bytes());
+        assert_eq!(&bytes[40..44], &0.5f32.to_le_bytes(), "first parameter");
         let name_len = usize::from(u16_at(&bytes, 24));
-        assert_eq!(&bytes[32..32 + name_len], b"Languages::German");
+        assert_eq!(&bytes[176..176 + name_len], b"Languages::German");
         let index = u32_at(&bytes, 12) as usize;
-        assert_eq!(index, 32 + name_len);
+        assert_eq!(index, 176 + name_len);
         let text_offset = u32_at(&bytes, index + 8) as usize;
         let text_len = u32_at(&bytes, index + 12) as usize;
         assert_eq!(&bytes[text_offset..text_offset + text_len], b"Hund\0dog");
@@ -247,6 +270,34 @@ mod tests {
         let log = u32_at(&bytes, 20) as usize;
         assert_eq!(log, state + 40);
         assert_eq!(bytes.len(), log + 64);
+    }
+
+    #[test]
+    fn reads_version_1_with_default_settings() {
+        let v2 = deck().encode().unwrap();
+        // The same deck as version 1: no settings block, offsets 144 lower.
+        let mut v1 = v2[..32].to_vec();
+        v1.extend_from_slice(&v2[32 + SETTINGS_SIZE..]);
+        v1[4] = 1;
+        let shift = |at: usize, v1: &mut Vec<u8>| {
+            let value = u32_at(v1, at) - SETTINGS_SIZE as u32;
+            v1[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        };
+        for at in [12, 16, 20] {
+            shift(at, &mut v1);
+        }
+        for card in 0..2 {
+            shift(u32_at(&v1, 12) as usize + card * 16 + 8, &mut v1);
+        }
+        let decoded = DeckFile::decode(&v1).unwrap();
+        assert_eq!(decoded.settings, DeckSettings::default());
+        assert_eq!(
+            DeckFile {
+                settings: deck().settings,
+                ..decoded
+            },
+            deck()
+        );
     }
 
     #[test]
@@ -271,6 +322,7 @@ mod tests {
         let long = "ü".repeat(5000);
         let d = DeckFile {
             anki_deck: "x".into(),
+            settings: DeckSettings::default(),
             cards: vec![card(1, &long, &long, 0)],
             answer_log: Vec::new(),
         };

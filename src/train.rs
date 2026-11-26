@@ -7,7 +7,6 @@ use fsrs::{ComputeParametersInput, FSRS};
 use serde::Serialize;
 
 use crate::collection::read_revlog;
-use crate::config::Config;
 use crate::revlog::training_set;
 
 /// How well a set of parameters predicts the review history (lower is better).
@@ -24,23 +23,6 @@ pub struct TrainResult {
     pub defaults: Fit,
     pub trained: Fit,
     pub params: Vec<f32>,
-}
-
-impl TrainResult {
-    /// The parameter file text for the SD card.
-    pub fn config_text(&self, desired_retention: f32) -> String {
-        let config = Config {
-            params: self.params.clone(),
-            desired_retention,
-        };
-        config.to_text(&[
-            "inki FSRS-7 parameters".to_string(),
-            format!(
-                "trained on {} reviews of {} cards; log loss {:.4} (defaults {:.4})",
-                self.reviews, self.cards, self.trained.log_loss, self.defaults.log_loss
-            ),
-        ])
-    }
 }
 
 /// Trains on the review history of a collection or package. Takes from a

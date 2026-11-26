@@ -15,6 +15,7 @@ use crate::anki_model::{self, CardRow, NoteType};
 use crate::collection::Collection;
 use crate::deck_file::{self, DeckFile};
 use crate::revlog::{CardHistory, card_histories};
+use crate::settings::DeckSettings;
 use crate::template::{RenderContext, RenderedCard, html_to_text, render_card};
 
 const ANKI_SM2_RETENTION: f32 = 0.9;
@@ -286,7 +287,12 @@ pub fn card_state(
 
 /// Writes `<deck>.inki` into `dir`. Refuses to replace an existing file,
 /// which may hold progress made on the reader, unless `force` is set.
-pub fn write_deck(dir: &Path, deck: &DeckExport, force: bool) -> Result<PathBuf> {
+pub fn write_deck(
+    dir: &Path,
+    deck: &DeckExport,
+    settings: &DeckSettings,
+    force: bool,
+) -> Result<PathBuf> {
     let path = dir.join(format!(
         "{}.{}",
         file_stem(&deck.name),
@@ -302,6 +308,7 @@ pub fn write_deck(dir: &Path, deck: &DeckExport, force: bool) -> Result<PathBuf>
     fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
     let file = DeckFile {
         anki_deck: deck.name.clone(),
+        settings: *settings,
         cards: deck.cards.clone(),
         answer_log: Vec::new(),
     };
@@ -573,12 +580,12 @@ pub(crate) mod tests {
             cards: vec![card(1, "a", "b")],
             ..Default::default()
         };
-        let path = write_deck(dir.path(), &deck, false).unwrap();
+        let path = write_deck(dir.path(), &deck, &DeckSettings::default(), false).unwrap();
         assert_eq!(path.file_name().unwrap(), "Languages - German.inki");
         let file = DeckFile::decode(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(file.anki_deck, "Languages::German");
         assert_eq!(file.cards, deck.cards);
-        assert!(write_deck(dir.path(), &deck, false).is_err());
-        write_deck(dir.path(), &deck, true).unwrap();
+        assert!(write_deck(dir.path(), &deck, &DeckSettings::default(), false).is_err());
+        write_deck(dir.path(), &deck, &DeckSettings::default(), true).unwrap();
     }
 }

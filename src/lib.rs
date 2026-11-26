@@ -6,11 +6,11 @@
 
 pub mod anki_model;
 pub mod collection;
-pub mod config;
 pub mod deck_export;
 pub mod deck_file;
 pub mod revlog;
 pub mod server;
+pub mod settings;
 pub mod template;
 pub mod train;
 pub mod update;

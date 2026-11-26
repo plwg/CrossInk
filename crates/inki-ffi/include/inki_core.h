@@ -1,5 +1,5 @@
-// C interface to inki-core: FSRS-7 scheduling, the .inki deck format and the
-// fsrs7-params.txt parser, shared by the inki PC tool and the firmware.
+// C interface to inki-core: FSRS-7 scheduling and the .inki deck format,
+// shared by the inki PC tool and the firmware.
 // Implemented in Rust (crates/inki-ffi); see crates/inki-core for details.
 //
 // All functions are allocation-free and never block. Pointers must be valid;
@@ -16,7 +16,9 @@ extern "C" {
 #endif
 
 #define INKI_PARAM_COUNT 34
+#define INKI_DECK_VERSION 2
 #define INKI_DECK_HEADER_SIZE 32
+#define INKI_DECK_SETTINGS_SIZE 144
 #define INKI_INDEX_ENTRY_SIZE 16
 #define INKI_STATE_RECORD_SIZE 20
 #define INKI_REVIEW_LOG_ENTRY_SIZE 32
@@ -41,19 +43,8 @@ typedef struct {
   InkiScheduled easy;
 } InkiNextStates;
 
-typedef struct {
-  float params[INKI_PARAM_COUNT];
-  float desired_retention;
-} InkiConfig;
-
-// FSRS-7 defaults and 90% desired retention.
-void inki_default_config(InkiConfig* out);
 // Clamps parameters into the ranges FSRS-7 accepts.
 void inki_clip_params(float* params);
-// Parses fsrs7-params.txt into `config`: keys missing from the file get the
-// defaults, parameters are clipped. Returns false, leaving `config`
-// unchanged, if a value is malformed.
-bool inki_parse_config(const char* text, size_t length, InkiConfig* config);
 
 // `rating`: 1 Again, 2 Hard, 3 Good, 4 Easy (others are clamped).
 float inki_retrievability(const float* params, const InkiMemoryState* state, float elapsed_days);
@@ -75,7 +66,16 @@ typedef struct {
   uint32_t state_offset;
   uint32_t log_offset;
   uint16_t name_length;
+  uint16_t version;  // INKI_DECK_VERSION when writing; 1 or 2 when read
 } InkiDeckHeader;
+
+// How a deck is studied, chosen on the PC.
+typedef struct {
+  uint16_t new_per_day;
+  uint16_t reviews_per_day;  // relearning is not limited
+  float desired_retention;
+  float params[INKI_PARAM_COUNT];  // FSRS-7 defaults or trained parameters
+} InkiDeckSettings;
 
 typedef struct {
   uint64_t anki_card_id;
@@ -106,6 +106,16 @@ typedef struct {
 void inki_encode_deck_header(const InkiDeckHeader* header, uint8_t* out /* 32 bytes */);
 // Checks magic, version and that every region fits in `file_size` bytes.
 bool inki_decode_deck_header(const uint8_t* in /* 32 bytes */, uint64_t file_size, InkiDeckHeader* out);
+
+// Offset of the settings block, or 0 for a version 1 deck, which has none.
+uint32_t inki_deck_settings_offset(const InkiDeckHeader* header);
+// 20 new cards and 200 reviews a day, 90% retention, FSRS-7 default parameters.
+void inki_default_deck_settings(InkiDeckSettings* out);
+void inki_encode_deck_settings(const InkiDeckSettings* settings, uint8_t* out /* 144 bytes */);
+// A null `in` gives the defaults. A retention FSRS-7 cannot use, or a
+// parameter that is not a number, falls back to the default; parameters are
+// clipped.
+void inki_decode_deck_settings(const uint8_t* in /* 144 bytes */, InkiDeckSettings* out);
 // Complete answer-log entries; a partly written last entry is not counted.
 uint64_t inki_review_log_entries(const InkiDeckHeader* header, uint64_t file_size);
 // Where the next answer goes: after the last complete entry.

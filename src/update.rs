@@ -104,6 +104,7 @@ pub fn update_deck(
     Ok((
         DeckFile {
             anki_deck,
+            settings: deck.settings,
             cards,
             answer_log: deck.answer_log.clone(),
         },
@@ -136,6 +137,7 @@ mod tests {
         assert_eq!(deck.name, "Languages");
         let mut file = DeckFile {
             anki_deck: deck.name,
+            settings: Default::default(),
             cards: deck.cards,
             answer_log: vec![7; 64],
         };

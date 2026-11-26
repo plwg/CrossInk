@@ -7,18 +7,18 @@
 use core::slice;
 
 use inki_core::format::{
-    self, CardIndexEntry, DeckHeader, HEADER_SIZE, INDEX_ENTRY_SIZE, REVIEW_LOG_ENTRY_SIZE,
-    ReviewLogEntry, STATE_RECORD_SIZE, StateRecord,
+    self, CardIndexEntry, DeckHeader, DeckSettings, HEADER_SIZE, INDEX_ENTRY_SIZE,
+    REVIEW_LOG_ENTRY_SIZE, ReviewLogEntry, SETTINGS_SIZE, STATE_RECORD_SIZE, StateRecord,
 };
 use inki_core::fsrs7::{self, MemoryState, NextStates, Params, Rating};
-use inki_core::params::{self, Config};
 
 // Layouts the C header relies on.
 const _: () = {
     assert!(size_of::<MemoryState>() == 12);
     assert!(size_of::<fsrs7::Scheduled>() == 16);
     assert!(size_of::<NextStates>() == 64);
-    assert!(size_of::<Config>() == 4 * 35);
+    assert!(size_of::<DeckHeader>() == 20);
+    assert!(size_of::<DeckSettings>() == SETTINGS_SIZE);
     assert!(size_of::<StateRecord>() == 20);
     assert!(size_of::<CardIndexEntry>() == 16);
     assert!(size_of::<ReviewLogEntry>() == 32);
@@ -73,41 +73,10 @@ unsafe fn write<T>(out: *mut T, value: T) {
 /// # Safety
 /// See `inki_core.h`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn inki_default_config(out: *mut Config) {
-    // SAFETY: see the header.
-    unsafe { write(out, Config::default()) }
-}
-
-/// # Safety
-/// See `inki_core.h`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn inki_clip_params(params: *mut f32) {
     // SAFETY: see the header.
     if let Some(p) = unsafe { params.cast::<Params>().as_mut() } {
         fsrs7::clip_params(p);
-    }
-}
-
-/// # Safety
-/// See `inki_core.h`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn inki_parse_config(
-    text: *const u8,
-    length: usize,
-    config: *mut Config,
-) -> bool {
-    // SAFETY: see the header.
-    let (Some(config), false) = (unsafe { config.as_mut() }, text.is_null()) else {
-        return false;
-    };
-    // SAFETY: `text` points at `length` bytes.
-    let text = unsafe { slice::from_raw_parts(text, length) };
-    match params::parse(text) {
-        Ok(parsed) => {
-            *config = parsed;
-            true
-        }
-        Err(_) => false,
     }
 }
 
@@ -226,6 +195,42 @@ pub unsafe extern "C" fn inki_decode_deck_header(
             true
         }
         None => false,
+    }
+}
+
+/// # Safety
+/// See `inki_core.h`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inki_deck_settings_offset(header: *const DeckHeader) -> u32 {
+    // SAFETY: see the header.
+    unsafe { (*header).settings_offset().unwrap_or(0) }
+}
+
+/// # Safety
+/// See `inki_core.h`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inki_default_deck_settings(out: *mut DeckSettings) {
+    // SAFETY: see the header.
+    unsafe { write(out, DeckSettings::default()) }
+}
+
+/// # Safety
+/// See `inki_core.h`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inki_encode_deck_settings(settings: *const DeckSettings, out: *mut u8) {
+    // SAFETY: see the header.
+    unsafe { write_bytes::<SETTINGS_SIZE>(out, (*settings).encode()) }
+}
+
+/// # Safety
+/// See `inki_core.h`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inki_decode_deck_settings(input: *const u8, out: *mut DeckSettings) {
+    // SAFETY: see the header.
+    unsafe {
+        let settings = bytes_in::<SETTINGS_SIZE>(input)
+            .map_or_else(DeckSettings::default, DeckSettings::decode);
+        write(out, settings);
     }
 }
 

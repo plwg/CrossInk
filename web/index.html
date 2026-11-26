@@ -35,7 +35,33 @@
 			</section>
 
 			<section class="panel">
-				<h2><span class="step">2</span>Put a deck on the reader</h2>
+				<div class="panel-head">
+					<h2><span class="step">2</span>Study settings</h2>
+					<span id="params-state" class="pill"></span>
+				</div>
+				<p class="lead">
+					Each deck file keeps its own settings, so the reader needs nothing else. These are used
+					for the decks you download in step 3.
+				</p>
+				<div id="new-settings" class="settings"></div>
+				<div class="training">
+					<p class="hint">
+						FSRS-7 has default parameters. Training on the review history in your export fits
+						them to how you remember.
+					</p>
+					<div class="actions">
+						<button type="button" id="train" disabled>Train on my reviews</button>
+					</div>
+					<div id="train-result"></div>
+					<label class="check" id="use-trained-row" hidden>
+						<input id="use-trained" type="checkbox" checked />
+						<span>Use my trained parameters</span>
+					</label>
+				</div>
+			</section>
+
+			<section class="panel">
+				<h2><span class="step">3</span>Put a deck on the reader</h2>
 				<p class="lead">
 					Download a deck file and copy it into the <code>flashcards</code> folder on the SD card.
 					Subdecks are included.
@@ -44,51 +70,34 @@
 			</section>
 
 			<section class="panel">
-				<h2><span class="step">3</span>Add new cards to a deck on the reader</h2>
+				<h2><span class="step">4</span>Update a deck on the reader</h2>
 				<p class="lead">
-					Added cards in Anki? Take the deck's <code>.inki</code> file from the SD card's
-					<code>flashcards</code> folder, choose it here together with a fresh export in step 1,
-					and copy the downloaded file back over the old one. Progress made on the reader is kept.
-					Don't study on the reader in between.
+					Take the deck's <code>.inki</code> file from the SD card's <code>flashcards</code> folder
+					to add cards you added in Anki (with a fresh export in step 1) or to change its settings.
+					Copy the downloaded file back over the old one. Progress made on the reader is kept;
+					don't study on the reader in between.
 				</p>
 				<label class="file">
 					<input id="deck-file" type="file" accept=".inki" />
 					<span class="file-button">Choose deck file…</span>
 					<span id="deck-name" class="file-name">No file chosen</span>
 				</label>
-				<div class="actions">
-					<button type="button" id="update" class="primary" disabled>Download updated deck</button>
-				</div>
-				<div id="update-result"></div>
-			</section>
-
-			<section class="panel">
-				<div class="panel-head">
-					<h2><span class="step">4</span>Scheduling <span class="optional">optional</span></h2>
-					<span id="params-state" class="pill"></span>
-				</div>
-				<p class="lead">
-					Train FSRS-7 on the review history in your export so intervals fit how you remember,
-					then copy <code>fsrs7-params.txt</code> into the <code>flashcards</code> folder.
-					Without it the reader uses the defaults.
-				</p>
-				<div class="actions">
-					<button type="button" id="train" disabled>Train on my reviews</button>
-				</div>
-				<div id="train-result"></div>
-				<form id="params-form" class="retention">
-					<label>
-						<span class="label">Desired retention</span>
-						<span class="retention-row">
-							<input id="retention" type="range" min="0.70" max="0.97" step="0.01" value="0.90" />
-							<output id="retention-value">90%</output>
-						</span>
-						<span class="hint">The chance of remembering a card when it comes due. Higher means more reviews.</span>
+				<div id="update-form" hidden>
+					<p id="deck-info" class="hint"></p>
+					<div id="update-settings" class="settings"></div>
+					<label class="field">
+						<span class="label">FSRS-7 parameters</span>
+						<select id="update-params"></select>
+					</label>
+					<label class="check">
+						<input id="add-cards" type="checkbox" checked />
+						<span id="add-cards-label">Add new cards from my Anki export</span>
 					</label>
 					<div class="actions">
-						<button type="submit" id="params-save" class="primary">Download fsrs7-params.txt</button>
+						<button type="button" id="update" class="primary" disabled>Download updated deck</button>
 					</div>
-				</form>
+				</div>
+				<div id="update-result"></div>
 			</section>
 		</main>
 

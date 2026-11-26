@@ -17,6 +17,11 @@ pub const DEFAULT_DESIRED_RETENTION: f32 = 0.9;
 pub const RETENTION_MIN: f32 = 0.0001;
 pub const RETENTION_MAX: f32 = 0.9999;
 
+/// Whether `value` is a desired retention FSRS-7 accepts.
+pub fn valid_retention(value: f32) -> bool {
+    (RETENTION_MIN..=RETENTION_MAX).contains(&value)
+}
+
 const NEWTON_ITERATIONS: usize = 7;
 const BISECTION_ITERATIONS: usize = 50;
 const MIN_INTERVAL_DAYS: f32 = 1.0 / 86_400.0;

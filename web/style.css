@@ -110,15 +110,33 @@ main {
 }
 
 .settings,
-.retention {
+.settings {
 	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 	gap: 16px;
+	margin-bottom: 16px;
 }
 
-.retention {
-	margin-top: 18px;
-	padding-top: 18px;
+.training {
+	padding-top: 16px;
 	border-top: 1px solid var(--line);
+}
+
+.field {
+	margin: 16px 0;
+}
+
+.check {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.check input {
+	accent-color: var(--accent);
+	width: 16px;
+	height: 16px;
 }
 
 label {
@@ -135,7 +153,8 @@ label {
 	font-size: 0.85rem;
 }
 
-input:not([type="range"]) {
+input[type="number"],
+select {
 	font: inherit;
 	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 	font-size: 0.9rem;

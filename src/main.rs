@@ -1,13 +1,15 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use fsrs::{FSRS, MemoryState};
 
 use inki::collection::Collection;
-use inki::config::{self, Config, check_retention};
 use inki::deck_export::{ExportOptions, build_decks, write_deck};
+use inki::deck_file::DeckFile;
+use inki::settings::{self, DeckSettings, MAX_PER_DAY, SettingsSummary, check_retention};
+use inki::train::TrainResult;
 
 /// PC companion for the CrossInk flashcard app.
 #[derive(Parser)]
@@ -17,22 +19,41 @@ struct Cli {
     command: Command,
 }
 
+/// Study settings stored in each deck file.
+#[derive(Args)]
+struct StudyArgs {
+    /// New cards introduced per day [default for new decks: 20].
+    #[arg(long, value_parser = clap::value_parser!(u16).range(0..=i64::from(MAX_PER_DAY)))]
+    new_per_day: Option<u16>,
+    /// Reviews per day; relearning cards are not limited [default for new decks: 200].
+    #[arg(long, value_parser = clap::value_parser!(u16).range(0..=i64::from(MAX_PER_DAY)))]
+    reviews_per_day: Option<u16>,
+    /// Target probability of remembering a card when it comes due. Higher
+    /// means more reviews [default for new decks: 0.9].
+    #[arg(long, value_parser = parse_retention)]
+    desired_retention: Option<f32>,
+}
+
+impl StudyArgs {
+    /// Applies the options given; returns whether any were.
+    fn apply_to(&self, settings: &mut DeckSettings) -> bool {
+        if let Some(n) = self.new_per_day {
+            settings.new_per_day = n;
+        }
+        if let Some(n) = self.reviews_per_day {
+            settings.reviews_per_day = n;
+        }
+        if let Some(r) = self.desired_retention {
+            settings.desired_retention = r;
+        }
+        self.new_per_day.is_some()
+            || self.reviews_per_day.is_some()
+            || self.desired_retention.is_some()
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
-    /// Train FSRS-7 parameters on your Anki review history and write the
-    /// parameter file for the device's SD card.
-    Params {
-        /// Anki collection: a .colpkg (File > Export > "Anki Collection
-        /// Package"), an .apkg exported with scheduling information, or the
-        /// collection.anki2 file from your Anki profile folder.
-        collection: PathBuf,
-        /// Where to write the parameter file.
-        #[arg(short, long, default_value = config::FILE_NAME)]
-        output: PathBuf,
-        /// Target probability of remembering a card when it comes due.
-        #[arg(long, default_value_t = 0.9, value_parser = parse_retention)]
-        desired_retention: f32,
-    },
     /// Convert Anki decks into .inki deck files for the e-reader. Copy them
     /// into the SD card's flashcards folder.
     Deck {
@@ -50,15 +71,33 @@ enum Command {
         /// Start every card as new instead of carrying over Anki progress.
         #[arg(long)]
         no_progress: bool,
-        /// Parameter file from `inki params`, used to carry over progress.
-        #[arg(short, long)]
-        params: Option<PathBuf>,
+        /// Train FSRS-7 on the review history in the export and store your
+        /// parameters in the decks (FSRS-7 defaults otherwise).
+        #[arg(long)]
+        train: bool,
+        #[command(flatten)]
+        study: StudyArgs,
         /// Replace deck files that already exist, discarding progress made
         /// on the e-reader since they were copied.
         #[arg(long)]
         force: bool,
     },
-    /// Open the web app for adding decks, syncing with Anki and training.
+    /// Show or change the study settings of a deck file. Progress is kept.
+    /// Don't study on the reader between copying the file off and back.
+    Settings {
+        /// The deck's .inki file.
+        deck_file: PathBuf,
+        #[command(flatten)]
+        study: StudyArgs,
+        /// Train FSRS-7 on the review history of this Anki export and store
+        /// the parameters in the deck.
+        #[arg(long, value_name = "COLLECTION", conflicts_with = "default_params")]
+        train: Option<PathBuf>,
+        /// Go back to the FSRS-7 default parameters.
+        #[arg(long)]
+        default_params: bool,
+    },
+    /// Open the web app for making and updating decks.
     Serve {
         /// Port on localhost.
         #[arg(short, long, default_value_t = 8787)]
@@ -70,9 +109,9 @@ enum Command {
         /// (Again/Hard/Good/Easy) and DAYS the time since the previous
         /// answer. The first answer needs no @DAYS. Example: 3,3@0.01,1@4,3@1.
         history: String,
-        /// Parameter file to use instead of the FSRS-7 defaults.
-        #[arg(short, long)]
-        params: Option<PathBuf>,
+        /// Use this deck file's parameters and retention instead of the defaults.
+        #[arg(long, value_name = "DECK_FILE")]
+        deck: Option<PathBuf>,
         /// Override the desired retention.
         #[arg(long, value_parser = parse_retention)]
         desired_retention: Option<f32>,
@@ -85,38 +124,41 @@ fn parse_retention(text: &str) -> Result<f32> {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Params {
-            collection,
-            output,
-            desired_retention,
-        } => train(&collection, &output, desired_retention),
         Command::Deck {
             collection,
             output,
             deck,
             no_progress,
-            params,
+            train,
+            study,
             force,
         } => export_decks(
             &collection,
             &output,
             deck.as_deref(),
             !no_progress,
-            params,
+            train,
+            &study,
             force,
         ),
+        Command::Settings {
+            deck_file,
+            study,
+            train,
+            default_params,
+        } => change_settings(&deck_file, &study, train.as_deref(), default_params),
         Command::Serve { port } => {
             tokio::runtime::Runtime::new()?.block_on(inki::server::serve(port))
         }
         Command::Preview {
             history,
-            params,
+            deck,
             desired_retention,
-        } => preview(&history, params, desired_retention),
+        } => preview(&history, deck.as_deref(), desired_retention),
     }
 }
 
-fn train(collection: &std::path::Path, output: &std::path::Path, retention: f32) -> Result<()> {
+fn train(collection: &Path) -> Result<TrainResult> {
     eprintln!("Training FSRS-7 on {}...", collection.display());
     let result = inki::train::train(collection)?;
     eprintln!("Used {} reviews of {} cards.", result.reviews, result.cards);
@@ -129,31 +171,29 @@ fn train(collection: &std::path::Path, output: &std::path::Path, retention: f32)
         "  your params    {:8.4}   {:8.4}   (lower is better)",
         result.trained.log_loss, result.trained.rmse_bins
     );
-    fs::write(output, result.config_text(retention))
-        .with_context(|| format!("cannot write {}", output.display()))?;
-    eprintln!("Wrote {}", output.display());
-    Ok(())
+    Ok(result)
 }
 
-fn load_config(params: Option<&PathBuf>) -> Result<Config> {
-    match params {
-        Some(path) => Config::parse(
-            &fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?,
-        ),
-        None => Ok(Config::default()),
-    }
+fn read_deck(path: &Path) -> Result<DeckFile> {
+    let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    DeckFile::decode(&bytes).with_context(|| format!("cannot read {}", path.display()))
 }
 
 fn export_decks(
-    collection: &std::path::Path,
-    output: &std::path::Path,
+    collection: &Path,
+    output: &Path,
     deck: Option<&str>,
     with_progress: bool,
-    params: Option<PathBuf>,
+    trained: bool,
+    study: &StudyArgs,
     force: bool,
 ) -> Result<()> {
-    let config = load_config(params.as_ref())?;
-    let fsrs = FSRS::new(&config.params)?;
+    let mut deck_settings = DeckSettings::default();
+    study.apply_to(&mut deck_settings);
+    if trained {
+        settings::set_params(&mut deck_settings, &train(collection)?.params)?;
+    }
+    let fsrs = settings::fsrs(&deck_settings)?;
     let collection = Collection::open(collection)?;
     let decks = build_decks(
         &collection,
@@ -161,13 +201,13 @@ fn export_decks(
             deck,
             with_progress,
             fsrs: &fsrs,
-            desired_retention: config.desired_retention,
+            desired_retention: deck_settings.desired_retention,
         },
     )?;
     ensure!(!decks.is_empty(), "the collection has no cards to export");
 
     for deck in &decks {
-        let dir = write_deck(output, deck, force)?;
+        let dir = write_deck(output, deck, &deck_settings, force)?;
         let studied = deck.studied();
         eprintln!(
             "{}: {} cards ({} studied, {} new) -> {}",
@@ -188,12 +228,36 @@ fn export_decks(
             );
         }
     }
-    if params.is_none() && with_progress {
-        eprintln!(
-            "Progress was converted with the FSRS-7 defaults; run `inki params` and pass \
-             --params for a closer fit."
-        );
+    eprintln!("Settings: {}.", SettingsSummary::of(&deck_settings));
+    Ok(())
+}
+
+fn change_settings(
+    path: &Path,
+    study: &StudyArgs,
+    train_on: Option<&Path>,
+    default_params: bool,
+) -> Result<()> {
+    let mut deck = read_deck(path)?;
+    let mut changed = study.apply_to(&mut deck.settings);
+    if let Some(collection) = train_on {
+        settings::set_params(&mut deck.settings, &train(collection)?.params)?;
+        changed = true;
     }
+    if default_params {
+        deck.settings.params = DeckSettings::default().params;
+        changed = true;
+    }
+    if changed {
+        fs::write(path, deck.encode()?)
+            .with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    println!(
+        "{} ({}): {}.",
+        path.display(),
+        deck.anki_deck,
+        SettingsSummary::of(&deck.settings)
+    );
     Ok(())
 }
 
@@ -235,13 +299,13 @@ fn format_days(days: f32) -> String {
 
 const RATING_NAMES: [&str; 4] = ["Again", "Hard", "Good", "Easy"];
 
-fn preview(history: &str, params: Option<PathBuf>, retention: Option<f32>) -> Result<()> {
-    let mut config = load_config(params.as_ref())?;
-    if let Some(retention) = retention {
-        config.desired_retention = retention;
-    }
-    let fsrs = FSRS::new(&config.params)?;
-    let dr = config.desired_retention;
+fn preview(history: &str, deck: Option<&Path>, retention: Option<f32>) -> Result<()> {
+    let settings = match deck {
+        Some(path) => read_deck(path)?.settings,
+        None => DeckSettings::default(),
+    };
+    let fsrs = FSRS::new(&settings.params)?;
+    let dr = retention.unwrap_or(settings.desired_retention);
 
     println!(
         "{:>3}  {:<6} {:>9}  {:>6}  {:>9}  {:>9}  {:>5}  {:>9}",

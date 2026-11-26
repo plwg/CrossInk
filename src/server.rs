@@ -1,6 +1,6 @@
 //! `inki serve`: a local web app. You upload an Anki export (and, to update
-//! a deck, its `.inki` file from the reader) and download deck files or the
-//! FSRS-7 parameter file. Nothing is read from or written to your files.
+//! a deck, its `.inki` file from the reader) and download deck files.
+//! Nothing is read from or written to your files.
 //!
 //! Listens on 127.0.0.1 only. Requests must carry a localhost Host header
 //! (blocks DNS rebinding) and any Origin header must be this app's own, so
@@ -22,17 +22,16 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 use crate::collection::Collection;
-use crate::config::{Config, check_retention};
 use crate::deck_export::{ExportOptions, build_decks, collect_cards, file_stem};
 use crate::deck_file::{self, DeckFile};
 use crate::revlog::training_set;
+use crate::settings::{self, DeckSettings, SettingsSummary, StudySettings};
 use crate::train::{TrainResult, train};
 use crate::update::{UpdateSummary, update_deck};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
 const STYLE_CSS: &str = include_str!("../web/style.css");
-const PARAMS_FILE: &str = "fsrs7-params.txt";
 /// Anki packages with media can be large.
 const MAX_UPLOAD: usize = 2 * 1024 * 1024 * 1024;
 const KEEP_UPLOADS: usize = 3;
@@ -158,9 +157,9 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/api/anki", post(post_anki))
         .route("/api/deck", post(post_deck))
+        .route("/api/inspect", post(post_inspect))
         .route("/api/update", post(post_update))
         .route("/api/train", post(post_train))
-        .route("/api/params", post(post_params))
         .route("/api/download/{id}", get(get_download))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD))
         .layer(middleware::from_fn(same_site_only))
@@ -292,12 +291,54 @@ async fn post_anki(State(state): State<Shared>, mut multipart: Multipart) -> Api
     }))
 }
 
-/// Your trained FSRS-7 parameters if you trained on this export, else defaults.
-fn upload_config(state: &AppState, id: u64) -> Config {
-    state.training(id).map_or_else(Config::default, |t| Config {
-        params: t.params,
-        desired_retention: 0.9,
-    })
+/// Which FSRS-7 parameters a deck gets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ParamsChoice {
+    /// The deck's own; for a new deck, the defaults.
+    #[default]
+    Keep,
+    Default,
+    /// Trained on the uploaded Anki export with `/api/train`.
+    Trained,
+}
+
+impl ParamsChoice {
+    fn parse(text: &str) -> Result<Self> {
+        match text.trim() {
+            "" | "keep" => Ok(Self::Keep),
+            "default" => Ok(Self::Default),
+            "trained" => Ok(Self::Trained),
+            other => Err(anyhow!("unknown parameter choice {other:?}")),
+        }
+    }
+
+    fn apply(self, state: &AppState, anki: Option<u64>, settings: &mut DeckSettings) -> Result<()> {
+        match self {
+            Self::Keep => {}
+            Self::Default => settings.params = DeckSettings::default().params,
+            Self::Trained => {
+                let training = anki
+                    .and_then(|id| state.training(id))
+                    .context("Train on your reviews first.")?;
+                settings::set_params(settings, &training.params)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn export_options<'a>(
+    fsrs: &'a FSRS,
+    settings: &DeckSettings,
+    deck: Option<&'a str>,
+) -> ExportOptions<'a> {
+    ExportOptions {
+        deck,
+        with_progress: true,
+        fsrs,
+        desired_retention: settings.desired_retention,
+    }
 }
 
 #[derive(Serialize)]
@@ -311,6 +352,10 @@ struct DownloadReady<S> {
 struct DeckRequest {
     anki: u64,
     deck: String,
+    #[serde(default)]
+    settings: StudySettings,
+    #[serde(default)]
+    params: ParamsChoice,
 }
 
 #[derive(Serialize)]
@@ -319,6 +364,7 @@ struct NewDeckSummary {
     cards: usize,
     studied: usize,
     suspended: usize,
+    settings: SettingsSummary,
 }
 
 async fn post_deck(
@@ -326,24 +372,24 @@ async fn post_deck(
     Json(request): Json<DeckRequest>,
 ) -> ApiResult<DownloadReady<NewDeckSummary>> {
     let path = state.upload_copy(request.anki)?;
-    let config = upload_config(&state, request.anki);
+    let mut deck_settings = DeckSettings::default();
+    request.settings.check()?.apply_to(&mut deck_settings);
+    request
+        .params
+        .apply(&state, Some(request.anki), &mut deck_settings)?;
     let (filename, bytes, summary) = run_task(&state, move || {
-        let fsrs = FSRS::new(&config.params)?;
+        let fsrs = settings::fsrs(&deck_settings)?;
         let collection = Collection::open(&path)?;
         let deck = build_decks(
             &collection,
-            &ExportOptions {
-                deck: Some(&request.deck),
-                with_progress: true,
-                fsrs: &fsrs,
-                desired_retention: config.desired_retention,
-            },
+            &export_options(&fsrs, &deck_settings, Some(&request.deck)),
         )?
         .into_iter()
         .next()
         .context("that deck has no cards")?;
         let file = DeckFile {
             anki_deck: deck.name.clone(),
+            settings: deck_settings,
             cards: deck.cards.clone(),
             answer_log: Vec::new(),
         };
@@ -355,6 +401,7 @@ async fn post_deck(
                 cards: deck.cards.len(),
                 studied: deck.studied(),
                 suspended: deck.suspended,
+                settings: SettingsSummary::of(&deck_settings),
             },
         ))
     })
@@ -367,13 +414,57 @@ async fn post_deck(
     }))
 }
 
-/// Multipart fields: `anki` (upload id) and `deck` (the .inki file).
+#[derive(Serialize)]
+struct DeckInfo {
+    anki_deck: String,
+    cards: usize,
+    studied: usize,
+    answers: usize,
+    settings: SettingsSummary,
+}
+
+/// Reads a deck file (multipart field `deck`) to show what it holds.
+async fn post_inspect(mut multipart: Multipart) -> ApiResult<DeckInfo> {
+    let mut deck = None;
+    while let Some(field) = multipart.next_field().await? {
+        if field.name() == Some("deck") {
+            let name = field.file_name().unwrap_or("deck.inki").to_string();
+            deck = Some((name, field.bytes().await?));
+        }
+    }
+    let (name, bytes) =
+        deck.ok_or_else(|| anyhow!("Choose the deck's .inki file from the reader."))?;
+    let deck =
+        DeckFile::decode(&bytes).with_context(|| format!("{name} is not an inki deck file"))?;
+    Ok(Json(DeckInfo {
+        anki_deck: deck.anki_deck.clone(),
+        cards: deck.cards.len(),
+        studied: deck.studied(),
+        answers: deck.answers(),
+        settings: SettingsSummary::of(&deck.settings),
+    }))
+}
+
+#[derive(Serialize)]
+struct UpdateResult {
+    anki_deck: String,
+    cards: usize,
+    /// What the Anki export changed; absent when only settings changed.
+    from_anki: Option<UpdateSummary>,
+    settings: SettingsSummary,
+}
+
+/// Multipart fields: `deck` (the .inki file); optionally `anki` (upload id)
+/// to add new cards, `settings` (JSON study settings) and `params`
+/// (keep, default or trained).
 async fn post_update(
     State(state): State<Shared>,
     mut multipart: Multipart,
-) -> ApiResult<DownloadReady<UpdateSummary>> {
+) -> ApiResult<DownloadReady<UpdateResult>> {
     let mut anki = None;
     let mut deck = None;
+    let mut study = None;
+    let mut params = ParamsChoice::Keep;
     while let Some(field) = multipart.next_field().await? {
         match field.name() {
             Some("anki") => anki = field.text().await?.trim().parse::<u64>().ok(),
@@ -381,34 +472,50 @@ async fn post_update(
                 let name = field.file_name().unwrap_or("deck.inki").to_string();
                 deck = Some((name, field.bytes().await?));
             }
+            Some("settings") => {
+                let text = field.text().await?;
+                let parsed: StudySettings =
+                    serde_json::from_str(&text).context("the settings are not valid")?;
+                study = Some(parsed.check()?);
+            }
+            Some("params") => params = ParamsChoice::parse(&field.text().await?)?,
             _ => {}
         }
     }
-    let anki = anki.ok_or_else(|| anyhow!("Upload your Anki export first."))?;
     let (deck_name, deck_bytes) =
         deck.ok_or_else(|| anyhow!("Choose the deck's .inki file from the reader."))?;
-    let path = state.upload_copy(anki)?;
-    let config = upload_config(&state, anki);
+    let mut on_reader = DeckFile::decode(&deck_bytes)
+        .with_context(|| format!("{deck_name} is not an inki deck file"))?;
+    if let Some(study) = study {
+        study.apply_to(&mut on_reader.settings);
+    }
+    params.apply(&state, anki, &mut on_reader.settings)?;
+    let path = anki.map(|id| state.upload_copy(id)).transpose()?;
     let (filename, bytes, summary) = run_task(&state, move || {
-        let stem = deck_name
-            .strip_suffix(&format!(".{}", deck_file::EXTENSION))
-            .unwrap_or(&deck_name)
-            .to_string();
-        let on_reader = DeckFile::decode(&deck_bytes)
-            .with_context(|| format!("{deck_name} is not an inki deck file"))?;
-        let fsrs = FSRS::new(&config.params)?;
-        let collection = Collection::open(&path)?;
-        let (updated, summary) = update_deck(
-            &collection,
-            &stem,
-            &on_reader,
-            &ExportOptions {
-                deck: None,
-                with_progress: true,
-                fsrs: &fsrs,
-                desired_retention: config.desired_retention,
-            },
-        )?;
+        let (updated, from_anki) = match path {
+            Some(path) => {
+                let stem = deck_name
+                    .strip_suffix(&format!(".{}", deck_file::EXTENSION))
+                    .unwrap_or(&deck_name)
+                    .to_string();
+                let fsrs = settings::fsrs(&on_reader.settings)?;
+                let collection = Collection::open(&path)?;
+                let (updated, summary) = update_deck(
+                    &collection,
+                    &stem,
+                    &on_reader,
+                    &export_options(&fsrs, &on_reader.settings, None),
+                )?;
+                (updated, Some(summary))
+            }
+            None => (on_reader, None),
+        };
+        let summary = UpdateResult {
+            anki_deck: updated.anki_deck.clone(),
+            cards: updated.cards.len(),
+            from_anki,
+            settings: SettingsSummary::of(&updated.settings),
+        };
         // Same name as the reader's file, so copying it back replaces it.
         Ok((deck_name, updated.encode()?, summary))
     })
@@ -442,44 +549,6 @@ async fn post_train(
         upload.training = Some(result.clone());
     }
     Ok(Json(result))
-}
-
-#[derive(Deserialize)]
-struct ParamsRequest {
-    /// Use the training run on this upload; FSRS-7 defaults otherwise.
-    anki: Option<u64>,
-    desired_retention: f32,
-}
-
-#[derive(Serialize)]
-struct ParamsSummary {
-    trained: bool,
-    desired_retention: f32,
-}
-
-async fn post_params(
-    State(state): State<Shared>,
-    Json(request): Json<ParamsRequest>,
-) -> ApiResult<DownloadReady<ParamsSummary>> {
-    let retention = check_retention(request.desired_retention)?;
-    let training = request.anki.and_then(|id| state.training(id));
-    let text = match &training {
-        Some(t) => t.config_text(retention),
-        None => Config {
-            desired_retention: retention,
-            ..Config::default()
-        }
-        .to_text(&["inki FSRS-7 parameters (defaults)".to_string()]),
-    };
-    let url = state.add_download(PARAMS_FILE.to_string(), text.into_bytes());
-    Ok(Json(DownloadReady {
-        url,
-        filename: PARAMS_FILE.to_string(),
-        summary: ParamsSummary {
-            trained: training.is_some(),
-            desired_retention: retention,
-        },
-    }))
 }
 
 /// Content-Disposition with a UTF-8 `filename*`, so any deck name survives.
@@ -660,18 +729,18 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(send(&app, other_host).await.status, StatusCode::FORBIDDEN);
-        let other_origin = request("POST", "/api/params")
-            .header(header::ORIGIN, "https://evil.example")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"desired_retention": 0.9}"#))
-            .unwrap();
-        assert_eq!(send(&app, other_origin).await.status, StatusCode::FORBIDDEN);
-        let own_origin = request("POST", "/api/params")
-            .header(header::ORIGIN, "http://localhost:8787")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"desired_retention": 0.9}"#))
-            .unwrap();
-        assert_eq!(send(&app, own_origin).await.status, StatusCode::OK);
+        let deck_request = |origin: &str| {
+            request("POST", "/api/deck")
+                .header(header::ORIGIN, origin)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"anki": 1, "deck": "x"}"#))
+                .unwrap()
+        };
+        let other_origin = send(&app, deck_request("https://evil.example")).await;
+        assert_eq!(other_origin.status, StatusCode::FORBIDDEN);
+        // Reaches the handler, which finds no such upload.
+        let own_origin = send(&app, deck_request("http://localhost:8787")).await;
+        assert_eq!(own_origin.status, StatusCode::BAD_REQUEST);
         let page = request("GET", "/").body(Body::empty()).unwrap();
         assert_eq!(send(&app, page).await.status, StatusCode::OK);
     }
@@ -707,16 +776,31 @@ mod tests {
         let ready = post_json(
             &app,
             "/api/deck",
-            serde_json::json!({ "anki": anki, "deck": "Languages" }),
+            serde_json::json!({
+                "anki": anki,
+                "deck": "Languages",
+                "settings": { "new_per_day": 5, "reviews_per_day": 100, "desired_retention": 0.85 },
+                "params": "default",
+            }),
         )
         .await;
         assert_eq!(ready.status, StatusCode::OK, "{:?}", ready.json());
         let ready = ready.json();
         assert_eq!(ready["filename"], "Languages.inki");
         assert_eq!(ready["summary"]["cards"], 3);
+        assert_eq!(ready["summary"]["settings"]["new_per_day"], 5);
+        assert_eq!(ready["summary"]["settings"]["trained_params"], false);
         let file = download(&app, &ready).await;
         assert!(file.disposition.unwrap().contains("Languages.inki"));
         let mut deck = DeckFile::decode(&file.bytes).unwrap();
+        assert_eq!(
+            StudySettings::of(&deck.settings),
+            StudySettings {
+                new_per_day: 5,
+                reviews_per_day: 100,
+                desired_retention: 0.85
+            }
+        );
 
         // Study a card on the reader, then add a card in Anki and re-export.
         deck.cards[2].state = CardState {
@@ -748,9 +832,10 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
         let ready = reply.json();
         assert_eq!(ready["filename"], "Languages.inki");
-        assert_eq!(ready["summary"]["new_cards"], 1);
-        assert_eq!(ready["summary"]["studied_on_reader"], 2);
+        assert_eq!(ready["summary"]["from_anki"]["new_cards"], 1);
+        assert_eq!(ready["summary"]["from_anki"]["studied_on_reader"], 2);
         let updated = DeckFile::decode(&download(&app, &ready).await.bytes).unwrap();
+        assert_eq!(updated.settings, deck.settings, "settings kept");
         assert_eq!(updated.cards.len(), 4);
         assert_eq!(updated.cards[2].state, deck.cards[2].state);
         assert_eq!(updated.answer_log, deck.answer_log);
@@ -795,28 +880,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn params_file_with_defaults() {
+    async fn changes_settings_without_an_anki_export() {
+        let mut settings = DeckSettings::default();
+        settings.params[0] = 0.5;
+        let deck = DeckFile {
+            anki_deck: "Science".into(),
+            settings,
+            cards: Vec::new(),
+            answer_log: vec![1; 32],
+        };
+        let bytes = deck.encode().unwrap();
         let app = router(Arc::new(AppState::default()));
-        let ready = post_json(
+        let study = br#"{"new_per_day": 0, "reviews_per_day": 50, "desired_retention": 0.8}"#;
+
+        let reply = post_multipart(
             &app,
-            "/api/params",
-            serde_json::json!({ "desired_retention": 0.85 }),
+            "/api/update",
+            &[
+                ("deck", Some("Science.inki"), &bytes),
+                ("settings", None, study),
+            ],
         )
         .await;
-        assert_eq!(ready.status, StatusCode::OK);
-        let ready = ready.json();
-        assert_eq!(ready["summary"]["trained"], false);
-        let text = String::from_utf8(download(&app, &ready).await.bytes).unwrap();
-        let config = Config::parse(&text).unwrap();
-        assert_eq!(config.desired_retention, 0.85);
-        assert_eq!(config.params, fsrs::DEFAULT_PARAMETERS);
-        let bad = post_json(
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.json());
+        let ready = reply.json();
+        assert!(ready["summary"]["from_anki"].is_null());
+        assert_eq!(ready["summary"]["settings"]["trained_params"], true);
+        let updated = DeckFile::decode(&download(&app, &ready).await.bytes).unwrap();
+        assert_eq!(updated.settings.new_per_day, 0);
+        let info = post_multipart(
             &app,
-            "/api/params",
-            serde_json::json!({ "desired_retention": 2.0 }),
+            "/api/inspect",
+            &[("deck", Some("Science.inki"), &updated.encode().unwrap())],
+        )
+        .await
+        .json();
+        assert_eq!(info["anki_deck"], "Science");
+        assert_eq!(info["answers"], 1);
+        assert_eq!(info["settings"]["reviews_per_day"], 50);
+        assert_eq!(updated.settings.desired_retention, 0.8);
+        assert_eq!(updated.settings.params, settings.params, "parameters kept");
+        assert_eq!(updated.answer_log, deck.answer_log);
+
+        let reply = post_multipart(
+            &app,
+            "/api/update",
+            &[
+                ("deck", Some("Science.inki"), &bytes),
+                ("params", None, b"default"),
+            ],
         )
         .await;
-        assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+        let updated = DeckFile::decode(&download(&app, &reply.json()).await.bytes).unwrap();
+        assert!(updated.settings.uses_default_params());
+        assert_eq!(updated.settings.new_per_day, 20, "limits kept");
+
+        let reply = post_multipart(
+            &app,
+            "/api/update",
+            &[
+                ("deck", Some("Science.inki"), &bytes),
+                ("params", None, b"trained"),
+            ],
+        )
+        .await;
+        assert!(
+            reply.json()["error"]
+                .as_str()
+                .unwrap()
+                .contains("Train on your reviews")
+        );
+        let bad = br#"{"new_per_day": 0, "reviews_per_day": 50, "desired_retention": 1.5}"#;
+        let reply = post_multipart(
+            &app,
+            "/api/update",
+            &[
+                ("deck", Some("Science.inki"), &bytes),
+                ("settings", None, bad),
+            ],
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
     }
 
     #[test]
