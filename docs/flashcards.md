@@ -61,7 +61,8 @@ are shared with the `inki` PC tool as the Rust crate `inki-core`. The build
 compiles it with `scripts/build_inki_core.py` and links it, so building the
 firmware needs:
 
-- the `inki` repository next to this one (`../inki`), or its location in `INKI_DIR`
+- the [`inki` repository](https://github.com/plwg/inki) cloned next to this one
+  (`git clone https://github.com/plwg/inki ../inki`), or its location in `INKI_DIR`
 - Rust, with the target for the board: `rustup target add riscv32imc-unknown-none-elf`
   for the X3 and X4. The ESP32-S3 boards need Espressif's Xtensa Rust toolchain
   (`espup`); that path is untested.
