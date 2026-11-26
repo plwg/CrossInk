@@ -1,0 +1,26 @@
+[package]
+name = "inki-ffi"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "C interface to inki-core, linked into the CrossInk firmware"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+inki-core = { path = "../inki-core" }
+
+# Built on its own (not part of the inki workspace): a no_std static library
+# needs abort-on-panic, which must not apply to inki's tests.
+[workspace]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
