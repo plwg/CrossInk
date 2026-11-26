@@ -2,6 +2,7 @@
 name = "inki-core"
 version = "0.1.0"
 edition = "2024"
+license = "MIT AND BSD-3-Clause"
 description = "FSRS-7 scheduling and the .inki deck format, shared by the inki PC tool and the e-reader firmware"
 publish = false
 

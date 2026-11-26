@@ -136,3 +136,9 @@ cargo build --release --manifest-path crates/inki-ffi/Cargo.toml --target riscv3
 
 FSRS-7 by [Open Spaced Repetition](https://github.com/open-spaced-repetition),
 ported from fsrs-rs (BSD-3-Clause; see `crates/inki-core/LICENSE-fsrs-rs`).
+
+## License
+
+MIT; see `LICENSE`. The FSRS-7 port in `crates/inki-core/src/fsrs7.rs` is
+derived from fsrs-rs and also stays under its BSD-3-Clause licence
+(`crates/inki-core/LICENSE-fsrs-rs`).
