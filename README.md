@@ -18,7 +18,7 @@ same code.
 | `src/` | `inki` command-line tool (Rust) |
 | `crates/inki-core/` | Shared with the firmware: FSRS-7, the `.inki` format, the parameter file (`no_std`, no allocation) |
 | `crates/inki-ffi/` | C interface to inki-core, built as a static library for the firmware (`include/inki_core.h`) |
-| `../crossink-flashcards/` | CrossInk firmware fork with the flashcard screens (separate repo, alongside this one) |
+| `../crossink-flashcards/` | [CrossInk firmware fork](https://github.com/plwg/CrossInk/tree/feat/flashcards) with the flashcard screens (separate repo, alongside this one) |
 | `WISHLIST.md` | RWKV-Instant / RWKV-Curve plans |
 
 ## Web app
@@ -69,10 +69,12 @@ documented in the firmware fork's `docs/flashcards.md`.
 ## Firmware
 
 The CrossInk fork with the flashcard screens is its own repository,
-alongside this one in `../crossink-flashcards` (branch `feat/flashcards`).
-Build it for the X3/X4 with:
+[plwg/CrossInk](https://github.com/plwg/CrossInk) (branch `feat/flashcards`),
+cloned alongside this one in `../crossink-flashcards`. Build it for the X3/X4
+with:
 
 ```sh
+git clone -b feat/flashcards --recurse-submodules https://github.com/plwg/CrossInk ../crossink-flashcards
 cd ../crossink-flashcards && pio run -e default
 ```
 
