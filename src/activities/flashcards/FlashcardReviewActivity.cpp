@@ -52,16 +52,16 @@ void FlashcardReviewActivity::onEnter() {
   }
   enterMillis = millis();
 
-  const fsrs7::Config config = flashcards::loadConfig();
   const flashcards::StudyDay day = flashcards::studyDayFor(enterTime, flashcards::utcOffsetSeconds());
   uint16_t newDone = 0;
   uint16_t reviewsDone = 0;
   if (!deck.open(deckName)) {
+    if (deck.needsNewerFirmware()) errorText = tr(STR_FLASHCARDS_DECK_TOO_NEW);
     requestUpdate();
     return;
   }
   deck.countToday(day, newDone, reviewsDone);
-  if (!session.begin(config, flashcards::Limits{}, day, newDone, reviewsDone) || !deck.loadSession(session)) {
+  if (!session.begin(deck.config(), deck.limits(), day, newDone, reviewsDone) || !deck.loadSession(session)) {
     LOG_ERR(TAG, "Cannot start a session for %s", deckName.c_str());
     session.clear();
     requestUpdate();

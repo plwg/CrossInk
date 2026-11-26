@@ -2,7 +2,7 @@
 
 ### Added
 
-- Study flashcards on the reader: copy `.inki` deck files made from Anki decks with the `inki` PC tool into the `flashcards` folder, and they appear under Home > Flashcards, scheduled on the device with FSRS-7. Answers are saved after every card, and Anki progress carries over.
+- Study flashcards on the reader: copy `.inki` deck files made from Anki decks with the `inki` PC tool into the `flashcards` folder, and they appear under Home > Flashcards, scheduled on the device with FSRS-7. Each deck file carries its own daily limits, desired retention and FSRS-7 parameters. Answers are saved after every card, and Anki progress carries over.
 
 ## [v2.0.0] - 2026-11-24
 

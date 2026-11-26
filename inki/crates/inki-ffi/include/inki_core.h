@@ -53,8 +53,8 @@ void inki_next_state(const float* params, const InkiMemoryState* state, float el
                      InkiMemoryState* out);
 float inki_next_interval_days(const float* params, const InkiMemoryState* state, float desired_retention);
 // `current` is null for a new card.
-void inki_next_states(const float* params, const InkiMemoryState* current, float desired_retention,
-                      float elapsed_days, InkiNextStates* out);
+void inki_next_states(const float* params, const InkiMemoryState* current, float desired_retention, float elapsed_days,
+                      InkiNextStates* out);
 // Seconds for an interval in days: at least 60, saturating.
 uint32_t inki_interval_seconds(float days);
 

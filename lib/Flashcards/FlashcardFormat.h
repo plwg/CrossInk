@@ -3,10 +3,10 @@
 // Flashcard deck files on the SD card. All integers are little-endian.
 // Documented in docs/flashcards.md; the PC tool `inki` writes them.
 //
-//   /flashcards/fsrs7-params.txt   FSRS-7 parameters (optional)
-//   /flashcards/<deck>.inki        one file per deck:
+//   /flashcards/<deck>.inki   one file per deck:
 //
 //   header       32 bytes (DeckHeader)
+//   settings     144 bytes (DeckSettings); not in version 1 files
 //   deck name    the Anki deck name, nameLength bytes (not used by the reader)
 //   card index   cardCount entries at indexOffset
 //   card text    question, NUL, answer for each card
@@ -21,11 +21,12 @@
 namespace flashcards {
 
 constexpr char kRootDir[] = "/flashcards";
-constexpr char kParamsPath[] = "/flashcards/fsrs7-params.txt";
 constexpr char kDeckExtension[] = ".inki";
 
-constexpr uint16_t kFormatVersion = 1;
+// The version inki writes. Version 1 (no settings block) is still read.
+constexpr uint16_t kFormatVersion = 2;
 constexpr size_t kDeckHeaderSize = 32;
+constexpr size_t kDeckSettingsSize = 144;
 constexpr size_t kCardIndexEntrySize = 16;
 constexpr size_t kStateRecordSize = 20;
 constexpr size_t kReviewLogEntrySize = 32;
@@ -42,6 +43,7 @@ struct DeckHeader {
   uint32_t stateOffset;
   uint32_t logOffset;
   uint16_t nameLength;
+  uint16_t version;  // kFormatVersion when writing; 1 or 2 when read
 };
 
 void encodeDeckHeader(const DeckHeader& header, uint8_t* out);
@@ -56,6 +58,26 @@ size_t reviewLogEntries(const DeckHeader& header, size_t fileSize);
 // Where the next answer is appended: after the last complete entry, so a
 // partly written one is overwritten.
 size_t reviewLogAppendOffset(const DeckHeader& header, size_t fileSize);
+
+// How a deck is studied, chosen on the PC with inki: u16 newPerDay;
+// u16 reviewsPerDay; f32 desiredRetention; f32 params[34].
+struct DeckSettings {
+  uint16_t newPerDay;
+  uint16_t reviewsPerDay;
+  fsrs7::Config fsrs;  // FSRS-7 parameters and desired retention
+};
+
+// 20 new cards and 200 reviews a day, 90% retention, default parameters.
+// Version 1 decks, which have no settings block, use these.
+DeckSettings defaultDeckSettings();
+
+// Offset of the settings block, or 0 for a version 1 deck, which has none.
+uint32_t deckSettingsOffset(const DeckHeader& header);
+
+void encodeDeckSettings(const DeckSettings& settings, uint8_t* out);
+// A retention FSRS-7 cannot use, or a parameter that is not a number, falls
+// back to the default; parameters are clipped.
+void decodeDeckSettings(const uint8_t* in, DeckSettings& out);
 
 // Card index entry. Card text lives at textOffset
 // (from the start of the file): UTF-8 front, a NUL byte, UTF-8 back.

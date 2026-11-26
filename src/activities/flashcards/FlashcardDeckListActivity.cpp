@@ -34,7 +34,6 @@ void FlashcardDeckListActivity::reloadDecks() {
 
   uint32_t now = 0;
   hasClock = flashcards::currentTime(now);
-  const fsrs7::Config config = flashcards::loadConfig();
   const flashcards::StudyDay day = flashcards::studyDayFor(now, flashcards::utcOffsetSeconds());
 
   decks.reserve(names.size());
@@ -45,10 +44,10 @@ void FlashcardDeckListActivity::reloadDecks() {
     uint16_t newDone = 0;
     uint16_t reviewsDone = 0;
     if (!deck.open(row.name)) {
-      row.counts = tr(STR_FLASHCARDS_DECK_FAILED);
+      row.counts = deck.needsNewerFirmware() ? tr(STR_FLASHCARDS_DECK_TOO_NEW) : tr(STR_FLASHCARDS_DECK_FAILED);
     } else if (hasClock) {
       deck.countToday(day, newDone, reviewsDone);
-      if (session.begin(config, flashcards::Limits{}, day, newDone, reviewsDone) && deck.loadSession(session)) {
+      if (session.begin(deck.config(), deck.limits(), day, newDone, reviewsDone) && deck.loadSession(session)) {
         char buf[64];
         snprintf(buf, sizeof(buf), tr(STR_FLASHCARDS_DECK_COUNTS), static_cast<unsigned>(session.dueCount()),
                  static_cast<unsigned>(session.newCount()));

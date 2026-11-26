@@ -72,33 +72,20 @@ inline MemoryState fromInki(const InkiMemoryState& s) {
   return MemoryState{s.stability, s.difficulty, s.stability_fast};
 }
 inline ScheduledState fromInki(const InkiScheduled& s) { return ScheduledState{fromInki(s.memory), s.interval_days}; }
-inline Config fromInki(const InkiConfig& c) {
-  Config out{};
-  std::memcpy(out.params.w, c.params, sizeof(out.params.w));
-  out.desiredRetention = c.desired_retention;
-  return out;
-}
 }  // namespace detail
 
 // FSRS-7 defaults with 90% desired retention.
 inline Config defaultConfig() {
-  InkiConfig config{};
-  inki_default_config(&config);
-  return detail::fromInki(config);
+  InkiDeckSettings defaults{};
+  inki_default_deck_settings(&defaults);
+  Config out{};
+  std::memcpy(out.params.w, defaults.params, sizeof(out.params.w));
+  out.desiredRetention = defaults.desired_retention;
+  return out;
 }
 
 // FSRS-7 defaults from fsrs-rs v7.0.0.
 inline const Params kDefaultParams = defaultConfig().params;
-
-// Parses the parameter file written by `inki` (fsrs7-params.txt). Keys
-// missing from the file get the defaults; parameters are clipped. Returns
-// false on a malformed value and leaves `out` unchanged.
-inline bool parseConfig(const char* text, size_t length, Config& out) {
-  InkiConfig config{};
-  if (!inki_parse_config(text, length, &config)) return false;
-  out = detail::fromInki(config);
-  return true;
-}
 
 // Probability of recall after `elapsedDays` days.
 inline float retrievability(const Params& params, const MemoryState& state, float elapsedDays) {

@@ -14,26 +14,33 @@ X4 the clock drifts during sleep; use **Sync Clock** in Settings before studying
 
 ## Getting decks onto the reader
 
-Decks are made on a computer with `inki`. Run `inki serve` and open
+Decks are made on a computer with `inki`, the PC tool in this repository's
+`inki/` folder: download it from the
+[releases page](https://github.com/plwg/CrossInk/releases) or build it with
+`cargo build --release` in `inki/`. Run `inki serve` and open
 http://localhost:8787:
 
 1. In Anki, choose **File > Export**, pick **Anki Deck Package (.apkg)**, and
    tick **Include scheduling information** to keep your progress. Choose that
    file in step 1 of the page.
-2. Download a deck. You get one file, such as `German.inki`. Copy it into the
-   `flashcards` folder on the SD card (create the folder the first time).
-   Subdecks are included.
-3. Optional: train FSRS-7 on your reviews and copy the downloaded
-   `fsrs7-params.txt` into the same folder.
+2. Pick the study settings: new cards and reviews per day, desired
+   retention, and optionally FSRS-7 parameters trained on your reviews.
+3. Download a deck. You get one file, such as `German.inki`, which holds the
+   cards, their progress and the settings. Copy it into the `flashcards`
+   folder on the SD card (create the folder the first time). Subdecks are
+   included.
 
 **Flashcards** appears on the Home screen once the `flashcards` folder exists.
 
-To add cards you created in Anki later, export again, choose the deck's
-`.inki` file from the SD card in step 3 of the page, and copy the downloaded
-file back over it. Progress made on the reader is kept. Avoid studying on the
-reader between taking the file off the card and putting the new one back.
+To change a deck's settings, or to add cards you created in Anki later (with
+a fresh export), choose the deck's `.inki` file from the SD card in step 4 of
+the page, and copy the downloaded file back over it. Progress made on the
+reader is kept. Avoid studying on the reader between taking the file off the
+card and putting the new one back.
 
-The command line does the same: `inki deck German.apkg -o /path/to/sdcard/flashcards`.
+The command line does the same: `inki deck German.apkg -o /path/to/sdcard/flashcards`
+makes decks, and `inki settings /path/to/sdcard/flashcards/German.inki --new-per-day 10`
+changes a deck's settings.
 
 ## Studying
 
@@ -47,36 +54,35 @@ The deck list shows how many cards are due and new today. Open a deck to study.
 Each answer button shows when the card will come back. To leave while the
 answer is showing, hold **Back** for one second.
 
-Limits follow Anki's defaults: 20 new cards and 200 reviews a day, with the day
-starting at 4 am local time (set **Clock UTC Offset** in Settings). Cards you get wrong come
-back later in the same session.
+Each deck has its own daily limits, set with `inki`; the defaults are Anki's,
+20 new cards and 200 reviews a day. The day starts at 4 am local time (set
+**Clock UTC Offset** in Settings). Cards you get wrong come back later in the
+same session and do not count against the review limit.
 
 Only text is shown. Formatting, images (shown as `[image]`), sound and
 type-in answers are not available on e-ink.
 
 ## Building
 
-The scheduler (FSRS-7), the deck file format and the parameter-file parser
-are shared with the `inki` PC tool as the Rust crate `inki-core`. The build
-compiles it with `scripts/build_inki_core.py` and links it, so building the
-firmware needs:
-
-- the [`inki` repository](https://github.com/plwg/inki) cloned next to this one
-  (`git clone https://github.com/plwg/inki ../inki`), or its location in `INKI_DIR`
-- Rust, with the target for the board: `rustup target add riscv32imc-unknown-none-elf`
-  for the X3 and X4. The ESP32-S3 boards need Espressif's Xtensa Rust toolchain
-  (`espup`); that path is untested.
+The scheduler (FSRS-7) and the deck file format are shared with the `inki`
+PC tool, which lives in `inki/` in this repository, as the Rust crate
+`inki-core`. `scripts/build_inki_core.py` compiles it and links it into the
+firmware, and the build fails if the firmware's deck format version differs
+from inki-core's. Building needs Rust, with the target for the board:
+`rustup target add riscv32imc-unknown-none-elf` for the X3 and X4. The
+ESP32-S3 boards need Espressif's Xtensa Rust toolchain (`espup`); that path is
+untested.
 
 The firmware's C++ reaches it through `lib/Fsrs7/Fsrs7.h` and
 `lib/Flashcards/FlashcardFormat.cpp`; the C interface is
-`inki/crates/inki-ffi/include/inki_core.h`. FSRS-7 is ported from fsrs-rs
-v7.0.0 (BSD-3-Clause, Open Spaced Repetition).
+`inki/crates/inki-ffi/include/inki_core.h`. See `inki/README.md` for the PC
+tool. FSRS-7 is ported from fsrs-rs v7.0.0 (BSD-3-Clause, Open Spaced
+Repetition).
 
 ## Files
 
 ```text
-/flashcards/fsrs7-params.txt   FSRS-7 parameters (optional)
-/flashcards/<deck>.inki        one file per deck: cards, progress and answers
+/flashcards/<deck>.inki   one file per deck: settings, cards, progress and answers
 ```
 
 All integers are little-endian. A deck file is laid out as:
@@ -84,7 +90,8 @@ All integers are little-endian. A deck file is laid out as:
 | Part | Where | Contents |
 | --- | --- | --- |
 | Header | 0, 32 bytes | see below |
-| Deck name | 32 | the Anki deck name, UTF-8 (not used by the reader) |
+| Settings | 32, 144 bytes | daily limits and FSRS-7 parameters, see below |
+| Deck name | 176 | the Anki deck name, UTF-8 (not used by the reader) |
 | Card index | `indexOffset` | 16 bytes per card |
 | Card text | after the index | question, NUL, answer per card |
 | State | `stateOffset` | 20 bytes per card, rewritten in place after each answer |
@@ -99,7 +106,7 @@ log entry (power lost mid-answer) is ignored and overwritten by the next one.
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | char[4] | magic `INKD` |
-| 4 | u16 | version (1) |
+| 4 | u16 | version (2) |
 | 6 | u16 | flags (0) |
 | 8 | u32 | card count |
 | 12 | u32 | `indexOffset` |
@@ -108,6 +115,19 @@ log entry (power lost mid-answer) is ignored and overwritten by the next one.
 | 24 | u16 | deck name length |
 | 26 | u16 | reserved (0) |
 | 28 | u32 | reserved (0) |
+
+Version 1 files, made by earlier versions of `inki`, have no settings block:
+the deck name follows the header. The reader studies them with the default
+settings.
+
+### Settings
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | u16 | new cards per day |
+| 2 | u16 | reviews per day |
+| 4 | f32 | desired retention (0.0001-0.9999; otherwise 0.9 is used) |
+| 8 | f32[34] | FSRS-7 parameters (clipped to FSRS-7's ranges; the defaults if any is not a number) |
 
 ### Card index entry
 

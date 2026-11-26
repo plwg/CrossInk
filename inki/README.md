@@ -11,14 +11,20 @@ The scheduler and the `.inki` deck format are written once, in Rust
 so the PC and the reader read and write decks and schedule cards with the
 same code.
 
+inki lives in the `inki/` folder of the
+[CrossInk flashcards fork](https://github.com/plwg/CrossInk/tree/feat/flashcards),
+next to the firmware, so the two always change and release together.
+
 ## Layout
+
+Paths are relative to `inki/`.
 
 | Path | What |
 |---|---|
 | `src/` | `inki` command-line tool (Rust) |
 | `crates/inki-core/` | Shared with the firmware: FSRS-7 and the `.inki` format (`no_std`, no allocation) |
 | `crates/inki-ffi/` | C interface to inki-core, built as a static library for the firmware (`include/inki_core.h`) |
-| `../crossink-flashcards/` | [CrossInk firmware fork](https://github.com/plwg/CrossInk/tree/feat/flashcards) with the flashcard screens (separate repo, alongside this one) |
+| `..` | the CrossInk firmware, with the flashcard screens |
 | `WISHLIST.md` | RWKV-Instant / RWKV-Curve plans |
 
 ## Web app
@@ -89,19 +95,16 @@ documented in the firmware fork's `docs/flashcards.md`.
 
 ## Firmware
 
-The CrossInk fork with the flashcard screens is its own repository,
-[plwg/CrossInk](https://github.com/plwg/CrossInk) (branch `feat/flashcards`),
-cloned alongside this one in `../crossink-flashcards`. Build it for the X3/X4
-with:
+The firmware is the rest of this repository. Build it for the X3/X4 from the
+repository root with:
 
 ```sh
-git clone -b feat/flashcards --recurse-submodules https://github.com/plwg/CrossInk ../crossink-flashcards
-cd ../crossink-flashcards && pio run -e default
+pio run -e default
 ```
 
-The firmware is written to `.pio/build/default/firmware-x3-x4.bin` in that
-repository. Use pioarduino's PlatformIO Core 6.1.19, as CrossInk's CI does; PlatformIO
-6.2 cannot build it.
+The firmware is written to `.pio/build/default/firmware-x3-x4.bin`. Use
+pioarduino's PlatformIO Core 6.1.19, as CrossInk's CI does; PlatformIO 6.2
+cannot build it.
 
 ## Preview scheduling
 
@@ -117,10 +120,8 @@ uses a deck file's parameters and retention instead of the defaults.
 
 ## Shared code in the firmware
 
-The firmware fork's build (`scripts/build_inki_core.py`) compiles
-`crates/inki-ffi` for the board's CPU and links it. It fetches the inki tag
-pinned in the fork's `inki.version` file (`INKI_DIR=../inki` builds against
-a local checkout instead), and needs Rust with:
+The firmware build (`scripts/build_inki_core.py`) compiles
+`crates/inki-ffi` for the board's CPU and links it, so it needs Rust with:
 
 ```sh
 rustup target add riscv32imc-unknown-none-elf   # X3 / X4 (ESP32-C3)
@@ -128,25 +129,26 @@ rustup target add riscv32imc-unknown-none-elf   # X3 / X4 (ESP32-C3)
 
 Its C++ code calls inki-core through thin wrappers in `lib/Fsrs7/Fsrs7.h` and
 `lib/Flashcards/FlashcardFormat.cpp`. Rust's maths (`libm`) keeps the
-results bit-identical on the PC and the reader; the firmware grows by about
-2 KB.
+results bit-identical on the PC and the reader. The firmware fails to build
+if its deck format version differs from inki-core's.
 
 ## Versions
 
-inki releases are git tags (`v0.2.0`). The firmware fork pins the tag it is
-built with in `inki.version`, and its build fails if the deck format
-versions differ, so a firmware release and the inki tag it names always
-match. Each firmware release says which inki to use.
+inki and the firmware are released together: each release on the
+[releases page](https://github.com/plwg/CrossInk/releases) has the firmware
+and the matching inki.
 
-| inki | Deck format | Firmware |
+| Deck format | Made by | Reader |
 |---|---|---|
-| v0.2.0 | 2: settings in each deck | v2.0.0-flashcards.2 and later |
-| (untagged) | 1: separate `fsrs7-params.txt` | v2.0.0-flashcards.1 |
+| 2: settings in each deck | inki 0.2.0 and later | v2.0.0-flashcards.2 and later |
+| 1: separate `fsrs7-params.txt` | inki 0.1.0 | v2.0.0-flashcards.1 and later |
 
 The reader opens decks of its own format version and older; a deck from a
 newer inki shows "This deck needs newer firmware".
 
 ## Checks
+
+In `inki/`:
 
 ```sh
 cargo fmt --all

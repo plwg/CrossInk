@@ -58,26 +58,6 @@ void listDecks(std::vector<std::string>& out) {
   std::sort(out.begin(), out.end());
 }
 
-fsrs7::Config loadConfig() {
-  fsrs7::Config config = fsrs7::defaultConfig();
-  if (!Storage.exists(kParamsPath)) return config;
-  // The file is about 400 bytes; 1 KB leaves room for comments. Heap, not
-  // stack: it is only needed once per deck open.
-  constexpr size_t kMaxConfigBytes = 1024;
-  auto text = makeUniqueNoThrow<char[]>(kMaxConfigBytes);
-  if (!text) {
-    LOG_ERR(TAG, "OOM: %u bytes for %s; using FSRS-7 defaults", static_cast<unsigned>(kMaxConfigBytes), kParamsPath);
-    return config;
-  }
-  const size_t length = Storage.readFileToBuffer(kParamsPath, text.get(), kMaxConfigBytes);
-  if (length == 0 || !fsrs7::parseConfig(text.get(), length, config)) {
-    LOG_ERR(TAG, "Ignoring invalid %s; using FSRS-7 defaults", kParamsPath);
-    return fsrs7::defaultConfig();
-  }
-  LOG_INF(TAG, "Loaded FSRS-7 parameters, desired retention %.2f", static_cast<double>(config.desiredRetention));
-  return config;
-}
-
 bool currentTime(uint32_t& now) {
   uint16_t year = 0;
   uint8_t month = 0, day = 0, hour = 0, minute = 0;
@@ -102,6 +82,7 @@ bool Deck::open(const std::string& name) {
   name_ = name;
   path_ = std::string(kRootDir) + "/" + name + kDeckExtension;
   header_ = DeckHeader{};
+  needsNewerFirmware_ = false;
 
   FsFile file;
   if (!Storage.openFileForRead(TAG, path_, file)) {
@@ -111,13 +92,39 @@ bool Deck::open(const std::string& name) {
   uint8_t raw[kDeckHeaderSize];
   const bool read = readExact(file, raw, sizeof(raw));
   const size_t size = file.fileSize();
-  file.close();
   if (!read || !decodeDeckHeader(raw, size, header_)) {
-    LOG_ERR(TAG, "%s is not a version %u deck file", path_.c_str(), kFormatVersion);
+    file.close();
+    const uint16_t version = static_cast<uint16_t>(raw[4] | (raw[5] << 8));
+    needsNewerFirmware_ = read && std::memcmp(raw, "INKD", 4) == 0 && version > kFormatVersion;
+    LOG_ERR(TAG, "%s is not a deck file this firmware can read (version %u, supported up to %u)", path_.c_str(),
+            static_cast<unsigned>(version), static_cast<unsigned>(kFormatVersion));
     header_ = DeckHeader{};
     return false;
   }
+  settings_ = defaultDeckSettings();
+  const uint32_t settingsOffset = deckSettingsOffset(header_);
+  if (settingsOffset != 0) {
+    uint8_t block[kDeckSettingsSize];
+    if (!file.seekSet(settingsOffset) || !readExact(file, block, sizeof(block))) {
+      file.close();
+      LOG_ERR(TAG, "Cannot read the settings of %s", path_.c_str());
+      header_ = DeckHeader{};
+      return false;
+    }
+    decodeDeckSettings(block, settings_);
+  }
+  file.close();
+  LOG_INF(TAG, "%s: %u new and %u reviews a day, retention %.2f", name.c_str(),
+          static_cast<unsigned>(settings_.newPerDay), static_cast<unsigned>(settings_.reviewsPerDay),
+          static_cast<double>(settings_.fsrs.desiredRetention));
   return true;
+}
+
+Limits Deck::limits() const {
+  Limits limits;
+  limits.newPerDay = settings_.newPerDay;
+  limits.reviewsPerDay = settings_.reviewsPerDay;
+  return limits;
 }
 
 void Deck::countToday(const StudyDay& day, uint16_t& newDone, uint16_t& reviewsDone) const {

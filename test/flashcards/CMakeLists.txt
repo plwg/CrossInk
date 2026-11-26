@@ -1,15 +1,6 @@
-# inki-core (Rust) provides FSRS-7 and the .inki format; build its C library
-# for the host. The inki repository is expected next to this one, or at
-# $INKI_DIR.
-if(DEFINED ENV{INKI_DIR})
-  set(INKI_DIR "$ENV{INKI_DIR}")
-else()
-  get_filename_component(INKI_DIR "${REPO_ROOT}/../inki" ABSOLUTE)
-endif()
-set(INKI_FFI_DIR "${INKI_DIR}/crates/inki-ffi")
-if(NOT EXISTS "${INKI_FFI_DIR}/Cargo.toml")
-  message(FATAL_ERROR "inki-ffi not found in ${INKI_DIR}; clone inki next to this repository or set INKI_DIR")
-endif()
+# inki-core (Rust, in inki/) provides FSRS-7 and the .inki format; build its
+# C library for the host.
+set(INKI_FFI_DIR "${REPO_ROOT}/inki/crates/inki-ffi")
 find_program(CARGO cargo HINTS "$ENV{HOME}/.cargo/bin" REQUIRED)
 set(INKI_FFI_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/inki-ffi")
 set(INKI_FFI_LIB "${INKI_FFI_TARGET_DIR}/release/libinki_ffi.a")

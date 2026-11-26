@@ -21,9 +21,6 @@ bool hasFlashcardsFolder();
 // Names of the decks in /flashcards (the .inki files, without extension), sorted.
 void listDecks(std::vector<std::string>& out);
 
-// FSRS-7 settings from /flashcards/fsrs7-params.txt, or the defaults.
-fsrs7::Config loadConfig();
-
 // Current Unix time (UTC) from the RTC (X3) or the synced system clock.
 // Returns false when no trustworthy time is available.
 bool currentTime(uint32_t& now);
@@ -33,11 +30,18 @@ int32_t utcOffsetSeconds();
 
 class Deck {
  public:
-  // Opens /flashcards/<name>.inki. Returns false (and logs) on error.
+  // Opens /flashcards/<name>.inki and reads its settings. Returns false (and
+  // logs) on error.
   bool open(const std::string& name);
 
   const std::string& name() const { return name_; }
+  // After a failed open(): the file is a deck from a newer version of inki.
+  bool needsNewerFirmware() const { return needsNewerFirmware_; }
   uint32_t cardCount() const { return header_.cardCount; }
+  // FSRS-7 parameters and desired retention stored in the deck.
+  const fsrs7::Config& config() const { return settings_.fsrs; }
+  // Daily limits stored in the deck.
+  Limits limits() const;
 
   // Answers already given in `day`, read from the end of the answer log.
   void countToday(const StudyDay& day, uint16_t& newDone, uint16_t& reviewsDone) const;
@@ -56,6 +60,8 @@ class Deck {
   std::string name_;
   std::string path_;
   DeckHeader header_{};
+  DeckSettings settings_{};
+  bool needsNewerFirmware_ = false;
 };
 
 }  // namespace flashcards

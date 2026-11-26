@@ -35,7 +35,8 @@ DeckHeader sampleHeader() {
   DeckHeader h{};
   h.cardCount = 3;
   h.nameLength = 5;
-  h.indexOffset = 32 + 5;
+  h.version = flashcards::kFormatVersion;
+  h.indexOffset = 32 + 144 + 5;
   h.stateOffset = h.indexOffset + 3 * 16 + 100;
   h.logOffset = h.stateOffset + 3 * 20;
   return h;
@@ -69,6 +70,48 @@ TEST(FlashcardFormat, DeckHeaderRoundTripAndValidation) {
   flashcards::encodeDeckHeader(h, buf);
   buf[4] = 99;  // unsupported version
   EXPECT_FALSE(flashcards::decodeDeckHeader(buf, h.logOffset, out));
+}
+
+TEST(FlashcardFormat, SettingsBlockAndVersion1) {
+  const DeckHeader h = sampleHeader();
+  EXPECT_EQ(32u, flashcards::deckSettingsOffset(h));
+
+  // Version 1: no settings block, the name follows the header.
+  DeckHeader v1 = h;
+  v1.version = 1;
+  v1.indexOffset = 32 + 5;
+  uint8_t buf[flashcards::kDeckHeaderSize];
+  flashcards::encodeDeckHeader(v1, buf);
+  DeckHeader out{};
+  ASSERT_TRUE(flashcards::decodeDeckHeader(buf, 100000, out));
+  EXPECT_EQ(1u, out.version);
+  EXPECT_EQ(0u, flashcards::deckSettingsOffset(out));
+  // The same layout claiming version 2 has no room for the settings.
+  v1.version = 2;
+  flashcards::encodeDeckHeader(v1, buf);
+  EXPECT_FALSE(flashcards::decodeDeckHeader(buf, 100000, out));
+
+  flashcards::DeckSettings settings = flashcards::defaultDeckSettings();
+  EXPECT_EQ(20u, settings.newPerDay);
+  EXPECT_EQ(200u, settings.reviewsPerDay);
+  EXPECT_FLOAT_EQ(0.9f, settings.fsrs.desiredRetention);
+  settings.newPerDay = 7;
+  settings.fsrs.params.w[0] = 0.5f;
+  settings.fsrs.desiredRetention = 0.85f;
+  uint8_t block[flashcards::kDeckSettingsSize];
+  flashcards::encodeDeckSettings(settings, block);
+  EXPECT_EQ(7, block[0]);
+  flashcards::DeckSettings decoded{};
+  flashcards::decodeDeckSettings(block, decoded);
+  EXPECT_EQ(7u, decoded.newPerDay);
+  EXPECT_FLOAT_EQ(0.5f, decoded.fsrs.params.w[0]);
+  EXPECT_FLOAT_EQ(0.85f, decoded.fsrs.desiredRetention);
+
+  // A damaged retention falls back to the default.
+  const float bad = 3.0f;
+  std::memcpy(block + 4, &bad, sizeof(bad));
+  flashcards::decodeDeckSettings(block, decoded);
+  EXPECT_FLOAT_EQ(0.9f, decoded.fsrs.desiredRetention);
 }
 
 TEST(FlashcardFormat, AnswerLogAppendsAfterCompleteEntries) {

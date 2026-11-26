@@ -2,12 +2,11 @@
 PlatformIO pre-build script: build inki-core (Rust) and link it into the
 firmware.
 
-The flashcard scheduler (FSRS-7), the .inki deck format and the parameter
-file parser are shared with the inki PC tool as the Rust crate inki-core,
+The flashcard scheduler (FSRS-7) and the .inki deck format are shared with
+the inki PC tool (inki/ in this repository) as the Rust crate inki-core,
 exposed to C/C++ by the inki-ffi crate (include/inki_core.h). This script
 runs cargo for the board's CPU and adds the static library and header.
 
-The inki repository is found at ../inki next to this one, or at $INKI_DIR.
 Needs Rust (rustup) with the target for the board:
   ESP32-C3 (X3, X4):        rustup target add riscv32imc-unknown-none-elf
   ESP32-S3 (Sticky, X4 Pro): the Xtensa toolchain from espup (cargo +esp)
@@ -48,15 +47,9 @@ def find_cargo():
 
 
 project_dir = env.subst("$PROJECT_DIR")  # noqa: F821
-inki_dir = os.environ.get("INKI_DIR") or os.path.normpath(
-    os.path.join(project_dir, "..", "inki")
-)
-crate_dir = os.path.join(inki_dir, "crates", "inki-ffi")
+crate_dir = os.path.join(project_dir, "inki", "crates", "inki-ffi")
 if not os.path.isfile(os.path.join(crate_dir, "Cargo.toml")):
-    fail(
-        f"inki-ffi not found in {inki_dir}. Clone the inki repository next to this one "
-        "(../inki) or set INKI_DIR to its location."
-    )
+    fail(f"inki-ffi not found in {crate_dir}")
 
 cargo = find_cargo()
 if not cargo:

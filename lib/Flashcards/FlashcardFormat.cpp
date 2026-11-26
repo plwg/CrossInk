@@ -4,12 +4,27 @@
 
 #include <inki_core.h>
 
+#include <cstring>
+
 namespace flashcards {
+
+static_assert(kFormatVersion == INKI_DECK_VERSION, "inki-core writes a different deck format version");
+static_assert(kDeckHeaderSize == INKI_DECK_HEADER_SIZE && kDeckSettingsSize == INKI_DECK_SETTINGS_SIZE,
+              "deck layout differs from inki's");
 
 namespace {
 
 InkiDeckHeader toInki(const DeckHeader& h) {
-  return InkiDeckHeader{h.cardCount, h.indexOffset, h.stateOffset, h.logOffset, h.nameLength};
+  return InkiDeckHeader{h.cardCount, h.indexOffset, h.stateOffset, h.logOffset, h.nameLength, h.version};
+}
+
+DeckSettings fromInki(const InkiDeckSettings& s) {
+  DeckSettings out{};
+  out.newPerDay = s.new_per_day;
+  out.reviewsPerDay = s.reviews_per_day;
+  out.fsrs.desiredRetention = s.desired_retention;
+  std::memcpy(out.fsrs.params.w, s.params, sizeof(out.fsrs.params.w));
+  return out;
 }
 
 }  // namespace
@@ -22,8 +37,34 @@ void encodeDeckHeader(const DeckHeader& header, uint8_t* out) {
 bool decodeDeckHeader(const uint8_t* in, size_t fileSize, DeckHeader& out) {
   InkiDeckHeader h{};
   if (!inki_decode_deck_header(in, fileSize, &h)) return false;
-  out = DeckHeader{h.card_count, h.index_offset, h.state_offset, h.log_offset, h.name_length};
+  out = DeckHeader{h.card_count, h.index_offset, h.state_offset, h.log_offset, h.name_length, h.version};
   return true;
+}
+
+DeckSettings defaultDeckSettings() {
+  InkiDeckSettings s{};
+  inki_default_deck_settings(&s);
+  return fromInki(s);
+}
+
+uint32_t deckSettingsOffset(const DeckHeader& header) {
+  const InkiDeckHeader h = toInki(header);
+  return inki_deck_settings_offset(&h);
+}
+
+void encodeDeckSettings(const DeckSettings& settings, uint8_t* out) {
+  InkiDeckSettings s{};
+  s.new_per_day = settings.newPerDay;
+  s.reviews_per_day = settings.reviewsPerDay;
+  s.desired_retention = settings.fsrs.desiredRetention;
+  std::memcpy(s.params, settings.fsrs.params.w, sizeof(s.params));
+  inki_encode_deck_settings(&s, out);
+}
+
+void decodeDeckSettings(const uint8_t* in, DeckSettings& out) {
+  InkiDeckSettings s{};
+  inki_decode_deck_settings(in, &s);
+  out = fromInki(s);
 }
 
 size_t reviewLogEntries(const DeckHeader& header, size_t fileSize) {
