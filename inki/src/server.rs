@@ -26,6 +26,8 @@ use crate::deck_export::{ExportOptions, build_decks, collect_cards, file_stem};
 use crate::deck_file::{self, DeckFile};
 use crate::revlog::training_set;
 use crate::settings::{self, DeckSettings, SettingsSummary, StudySettings};
+#[cfg(test)]
+use crate::settings::{NewCardOrder, NewCardPlacement};
 use crate::train::{TrainResult, train};
 use crate::update::{UpdateSummary, update_deck};
 
@@ -779,7 +781,12 @@ mod tests {
             serde_json::json!({
                 "anki": anki,
                 "deck": "Languages",
-                "settings": { "new_per_day": 5, "reviews_per_day": 100, "desired_retention": 0.85 },
+                "settings": {
+                    "new_per_day": 5,
+                    "reviews_per_day": 100,
+                    "desired_retention": 0.85,
+                    "new_card_order": "random",
+                },
                 "params": "default",
             }),
         )
@@ -798,7 +805,9 @@ mod tests {
             StudySettings {
                 new_per_day: 5,
                 reviews_per_day: 100,
-                desired_retention: 0.85
+                desired_retention: 0.85,
+                new_card_order: NewCardOrder::Random,
+                new_card_placement: NewCardPlacement::AfterReviews,
             }
         );
 
@@ -908,6 +917,11 @@ mod tests {
         assert_eq!(ready["summary"]["settings"]["trained_params"], true);
         let updated = DeckFile::decode(&download(&app, &ready).await.bytes).unwrap();
         assert_eq!(updated.settings.new_per_day, 0);
+        assert_eq!(
+            updated.settings.new_card_placement,
+            inki_core::format::NEW_AFTER_REVIEWS,
+            "options missing from the request get their defaults"
+        );
         let info = post_multipart(
             &app,
             "/api/inspect",

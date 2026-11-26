@@ -107,6 +107,23 @@ function settingsFields(container, prefix, values) {
 	slider.addEventListener("input", () => {
 		shown.textContent = percent(Number(slider.value));
 	});
+	const choice = (key, value, label, hint, options) => {
+		const select = el(
+			"select",
+			{ id: `${prefix}-${key}` },
+			options.map(([optionValue, text]) =>
+				el("option", { value: optionValue, text }),
+			),
+		);
+		select.value = value;
+		return el(
+			"label",
+			{},
+			el("span", { className: "label", text: label }),
+			select,
+			el("span", { className: "hint", text: hint }),
+		);
+	};
 	container.replaceChildren(
 		number(
 			"new",
@@ -130,6 +147,26 @@ function settingsFields(container, prefix, values) {
 				text: "The chance of remembering a card when it comes due. Higher means more reviews.",
 			}),
 		),
+		choice(
+			"order",
+			values.new_card_order ?? "deck",
+			"New card order",
+			"Random order stays the same each day; cards added later are mixed in.",
+			[
+				["deck", "Deck order"],
+				["random", "Random"],
+			],
+		),
+		choice(
+			"placement",
+			values.new_card_placement ?? "after_reviews",
+			"New cards",
+			"Reviews always start with the cards you are most likely to have forgotten.",
+			[
+				["after_reviews", "After reviews"],
+				["mixed", "Mixed with reviews"],
+			],
+		),
 	);
 }
 
@@ -152,11 +189,15 @@ function readSettings(prefix) {
 		new_per_day: limit("new", "New cards per day"),
 		reviews_per_day: limit("reviews", "Reviews per day"),
 		desired_retention: Number($(`${prefix}-retention`).value),
+		new_card_order: $(`${prefix}-order`).value,
+		new_card_placement: $(`${prefix}-placement`).value,
 	};
 }
 
 const describeSettings = (s) =>
 	`${plural(s.new_per_day, "new card")} and ${plural(s.reviews_per_day, "review")} a day, ` +
+	`new cards in ${s.new_card_order === "random" ? "random" : "deck"} order ` +
+	`${s.new_card_placement === "mixed" ? "mixed with reviews" : "after reviews"}, ` +
 	`${percent(s.desired_retention)} retention, ${s.trained_params ? "trained" : "default"} parameters`;
 
 function refreshButtons() {
@@ -431,5 +472,7 @@ settingsFields($("new-settings"), "new", {
 	new_per_day: 20,
 	reviews_per_day: 200,
 	desired_retention: 0.9,
+	new_card_order: "deck",
+	new_card_placement: "after_reviews",
 });
 refreshButtons();

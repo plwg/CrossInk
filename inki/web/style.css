@@ -112,7 +112,7 @@ main {
 .settings,
 .settings {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 	gap: 16px;
 	margin-bottom: 16px;
 }
@@ -131,6 +131,10 @@ main {
 	align-items: center;
 	gap: 8px;
 	margin: 12px 0;
+}
+
+.check[hidden] {
+	display: none;
 }
 
 .check input {
@@ -409,4 +413,8 @@ button:not(:disabled):focus-visible {
 .file-name {
 	color: var(--muted);
 	overflow-wrap: anywhere;
+}
+
+select {
+	font-family: inherit;
 }

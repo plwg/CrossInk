@@ -42,6 +42,8 @@ class Deck {
   const fsrs7::Config& config() const { return settings_.fsrs; }
   // Daily limits stored in the deck.
   Limits limits() const;
+  // New-card order stored in the deck.
+  Ordering ordering() const;
 
   // Answers already given in `day`, read from the end of the answer log.
   void countToday(const StudyDay& day, uint16_t& newDone, uint16_t& reviewsDone) const;

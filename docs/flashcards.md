@@ -59,6 +59,12 @@ Each deck has its own daily limits, set with `inki`; the defaults are Anki's,
 **Clock UTC Offset** in Settings). Cards you get wrong come back later in the
 same session and do not count against the review limit.
 
+Reviews start with the cards you are most likely to have forgotten (lowest
+retrievability); when more are due than the limit, those are the ones shown.
+New cards come in deck order or a fixed random order, after the reviews or
+mixed evenly among them, as set for the deck in `inki`. A session loads at
+most 300 reviews and 100 new cards; open the deck again for more.
+
 Only text is shown. Formatting, images (shown as `[image]`), sound and
 type-in answers are not available on e-ink.
 
@@ -90,8 +96,8 @@ All integers are little-endian. A deck file is laid out as:
 | Part | Where | Contents |
 | --- | --- | --- |
 | Header | 0, 32 bytes | see below |
-| Settings | 32, 144 bytes | daily limits and FSRS-7 parameters, see below |
-| Deck name | 176 | the Anki deck name, UTF-8 (not used by the reader) |
+| Settings | 32, 160 bytes | daily limits, new card order and FSRS-7 parameters, see below |
+| Deck name | 192 | the Anki deck name, UTF-8 (not used by the reader) |
 | Card index | `indexOffset` | 16 bytes per card |
 | Card text | after the index | question, NUL, answer per card |
 | State | `stateOffset` | 20 bytes per card, rewritten in place after each answer |
@@ -106,7 +112,7 @@ log entry (power lost mid-answer) is ignored and overwritten by the next one.
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | char[4] | magic `INKD` |
-| 4 | u16 | version (2) |
+| 4 | u16 | version (3) |
 | 6 | u16 | flags (0) |
 | 8 | u32 | card count |
 | 12 | u32 | `indexOffset` |
@@ -116,9 +122,9 @@ log entry (power lost mid-answer) is ignored and overwritten by the next one.
 | 26 | u16 | reserved (0) |
 | 28 | u32 | reserved (0) |
 
-Version 1 files, made by earlier versions of `inki`, have no settings block:
-the deck name follows the header. The reader studies them with the default
-settings.
+Older files still open. Version 2 has a 144-byte settings block without the
+new-card options; version 1 has no settings block, and the deck name follows
+the header. What is missing gets the default.
 
 ### Settings
 
@@ -128,6 +134,11 @@ settings.
 | 2 | u16 | reviews per day |
 | 4 | f32 | desired retention (0.0001-0.9999; otherwise 0.9 is used) |
 | 8 | f32[34] | FSRS-7 parameters (clipped to FSRS-7's ranges; the defaults if any is not a number) |
+| 144 | u8 | new card order: 0 deck order, 1 random |
+| 145 | u8 | new cards: 0 after reviews, 1 mixed with reviews |
+| 146 | 14 bytes | reserved (0); readers ignore them, so later optional settings need no new version |
+
+Unknown values of the two options are read as 0.
 
 ### Card index entry
 

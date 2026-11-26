@@ -18,7 +18,7 @@ const _: () = {
     assert!(size_of::<fsrs7::Scheduled>() == 16);
     assert!(size_of::<NextStates>() == 64);
     assert!(size_of::<DeckHeader>() == 20);
-    assert!(size_of::<DeckSettings>() == SETTINGS_SIZE);
+    assert!(size_of::<DeckSettings>() == 148);
     assert!(size_of::<StateRecord>() == 20);
     assert!(size_of::<CardIndexEntry>() == 16);
     assert!(size_of::<ReviewLogEntry>() == 32);
@@ -225,13 +225,27 @@ pub unsafe extern "C" fn inki_encode_deck_settings(settings: *const DeckSettings
 /// # Safety
 /// See `inki_core.h`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn inki_decode_deck_settings(input: *const u8, out: *mut DeckSettings) {
+pub unsafe extern "C" fn inki_decode_deck_settings(
+    input: *const u8,
+    length: usize,
+    out: *mut DeckSettings,
+) {
+    let settings = if input.is_null() {
+        DeckSettings::default()
+    } else {
+        // SAFETY: `input` points at `length` bytes.
+        DeckSettings::decode(unsafe { slice::from_raw_parts(input, length) })
+    };
     // SAFETY: see the header.
-    unsafe {
-        let settings = bytes_in::<SETTINGS_SIZE>(input)
-            .map_or_else(DeckSettings::default, DeckSettings::decode);
-        write(out, settings);
-    }
+    unsafe { write(out, settings) }
+}
+
+/// # Safety
+/// See `inki_core.h`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inki_deck_settings_size(header: *const DeckHeader) -> u32 {
+    // SAFETY: see the header.
+    unsafe { (*header).settings_size() as u32 }
 }
 
 /// # Safety

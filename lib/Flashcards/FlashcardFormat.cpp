@@ -24,6 +24,8 @@ DeckSettings fromInki(const InkiDeckSettings& s) {
   out.reviewsPerDay = s.reviews_per_day;
   out.fsrs.desiredRetention = s.desired_retention;
   std::memcpy(out.fsrs.params.w, s.params, sizeof(out.fsrs.params.w));
+  out.randomNewOrder = s.new_card_order == INKI_NEW_ORDER_RANDOM;
+  out.mixNewWithReviews = s.new_card_placement == INKI_NEW_MIXED;
   return out;
 }
 
@@ -52,18 +54,25 @@ uint32_t deckSettingsOffset(const DeckHeader& header) {
   return inki_deck_settings_offset(&h);
 }
 
+size_t deckSettingsSize(const DeckHeader& header) {
+  const InkiDeckHeader h = toInki(header);
+  return inki_deck_settings_size(&h);
+}
+
 void encodeDeckSettings(const DeckSettings& settings, uint8_t* out) {
   InkiDeckSettings s{};
   s.new_per_day = settings.newPerDay;
   s.reviews_per_day = settings.reviewsPerDay;
   s.desired_retention = settings.fsrs.desiredRetention;
   std::memcpy(s.params, settings.fsrs.params.w, sizeof(s.params));
+  s.new_card_order = settings.randomNewOrder ? INKI_NEW_ORDER_RANDOM : INKI_NEW_ORDER_DECK;
+  s.new_card_placement = settings.mixNewWithReviews ? INKI_NEW_MIXED : INKI_NEW_AFTER_REVIEWS;
   inki_encode_deck_settings(&s, out);
 }
 
-void decodeDeckSettings(const uint8_t* in, DeckSettings& out) {
+void decodeDeckSettings(const uint8_t* in, size_t length, DeckSettings& out) {
   InkiDeckSettings s{};
-  inki_decode_deck_settings(in, &s);
+  inki_decode_deck_settings(in, length, &s);
   out = fromInki(s);
 }
 

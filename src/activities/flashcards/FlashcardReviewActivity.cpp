@@ -61,7 +61,8 @@ void FlashcardReviewActivity::onEnter() {
     return;
   }
   deck.countToday(day, newDone, reviewsDone);
-  if (!session.begin(deck.config(), deck.limits(), day, newDone, reviewsDone) || !deck.loadSession(session)) {
+  if (!session.begin(deck.config(), deck.limits(), deck.ordering(), day, enterTime, newDone, reviewsDone) ||
+      !deck.loadSession(session)) {
     LOG_ERR(TAG, "Cannot start a session for %s", deckName.c_str());
     session.clear();
     requestUpdate();

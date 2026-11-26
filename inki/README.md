@@ -84,10 +84,18 @@ Each deck file holds its own settings, so the reader needs no other file:
 | New cards per day | 20 |
 | Reviews per day (cards you forget again are not limited) | 200 |
 | Desired retention | 90% |
+| New card order (`--new-order`) | `deck` (Anki's order), or `random`: a fixed shuffle that stays the same each day |
+| New cards (`--new-placement`) | `after-reviews`, or `mixed`: spread evenly among the reviews |
 | FSRS-7 parameters | the FSRS-7 defaults, or trained on your reviews |
 
-A study day starts at 4 am local time, as in Anki. Decks made by earlier
-versions of inki (format version 1) have no settings and use the defaults
+Reviews always start with the cards you are most likely to have forgotten
+(lowest retrievability). If more are due than the daily limit, those are the
+ones shown. A study day starts at 4 am local time, as in Anki. The reader
+loads at most 300 reviews and 100 new cards at a time; open the deck again
+for more.
+
+Decks made by earlier versions of inki have no settings (format 1) or no
+card-order options (format 2) and use the defaults for what is missing,
 until you change their settings.
 
 On the reader, decks are under **Home > Flashcards**. The deck file format is
@@ -140,7 +148,8 @@ and the matching inki.
 
 | Deck format | Made by | Reader |
 |---|---|---|
-| 2: settings in each deck | inki 0.2.0 and later | v2.0.0-flashcards.2 and later |
+| 3: new card order options | inki 0.3.0 and later | v2.0.0-flashcards.3 and later |
+| 2: settings in each deck | inki 0.2.0 | v2.0.0-flashcards.2 and later |
 | 1: separate `fsrs7-params.txt` | inki 0.1.0 | v2.0.0-flashcards.1 and later |
 
 The reader opens decks of its own format version and older; a deck from a

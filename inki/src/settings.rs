@@ -1,11 +1,13 @@
-//! Per-deck study settings, stored in each deck file: daily limits, desired
-//! retention and the FSRS-7 parameters (`inki_core::format::DeckSettings`).
+//! Per-deck study settings, stored in each deck file: daily limits, the
+//! order of new cards, desired retention and the FSRS-7 parameters
+//! (`inki_core::format::DeckSettings`).
 
 use anyhow::{Result, ensure};
 use fsrs::FSRS;
 use serde::{Deserialize, Serialize};
 
 pub use inki_core::format::DeckSettings;
+use inki_core::format::{NEW_AFTER_REVIEWS, NEW_MIXED, NEW_ORDER_DECK, NEW_ORDER_RANDOM};
 use inki_core::fsrs7::{PARAM_COUNT, RETENTION_MAX, RETENTION_MIN, valid_retention};
 
 /// Highest daily limit accepted.
@@ -19,12 +21,72 @@ pub fn check_retention(value: f32) -> Result<f32> {
     Ok(value)
 }
 
+/// Which new cards come first.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum NewCardOrder {
+    /// The order of the deck in Anki.
+    #[default]
+    Deck,
+    /// A fixed random order; cards added later are mixed in.
+    Random,
+}
+
+/// When new cards are shown in a study session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum NewCardPlacement {
+    /// After the day's reviews.
+    #[default]
+    AfterReviews,
+    /// Spread evenly among the day's reviews.
+    Mixed,
+}
+
+impl NewCardOrder {
+    fn of(value: u8) -> Self {
+        if value == NEW_ORDER_RANDOM {
+            Self::Random
+        } else {
+            Self::Deck
+        }
+    }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Deck => NEW_ORDER_DECK,
+            Self::Random => NEW_ORDER_RANDOM,
+        }
+    }
+}
+
+impl NewCardPlacement {
+    fn of(value: u8) -> Self {
+        if value == NEW_MIXED {
+            Self::Mixed
+        } else {
+            Self::AfterReviews
+        }
+    }
+
+    fn code(self) -> u8 {
+        match self {
+            Self::AfterReviews => NEW_AFTER_REVIEWS,
+            Self::Mixed => NEW_MIXED,
+        }
+    }
+}
+
 /// The settings a person picks; the parameters come from training.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StudySettings {
     pub new_per_day: u16,
     pub reviews_per_day: u16,
     pub desired_retention: f32,
+    #[serde(default)]
+    pub new_card_order: NewCardOrder,
+    #[serde(default)]
+    pub new_card_placement: NewCardPlacement,
 }
 
 impl Default for StudySettings {
@@ -39,6 +101,8 @@ impl StudySettings {
             new_per_day: settings.new_per_day,
             reviews_per_day: settings.reviews_per_day,
             desired_retention: settings.desired_retention,
+            new_card_order: NewCardOrder::of(settings.new_card_order),
+            new_card_placement: NewCardPlacement::of(settings.new_card_placement),
         }
     }
 
@@ -51,11 +115,13 @@ impl StudySettings {
         Ok(self)
     }
 
-    /// Sets the limits and retention, keeping the parameters.
+    /// Sets everything but the parameters.
     pub fn apply_to(self, settings: &mut DeckSettings) {
         settings.new_per_day = self.new_per_day;
         settings.reviews_per_day = self.reviews_per_day;
         settings.desired_retention = self.desired_retention;
+        settings.new_card_order = self.new_card_order.code();
+        settings.new_card_placement = self.new_card_placement.code();
     }
 }
 
@@ -98,10 +164,19 @@ impl std::fmt::Display for SettingsSummary {
         let reviews = self.study.reviews_per_day;
         write!(
             f,
-            "{} new and {} review{} a day, {:.0}% desired retention, {} FSRS-7 parameters",
+            "{} new and {} review{} a day, new cards in {} order {}, \
+             {:.0}% desired retention, {} FSRS-7 parameters",
             self.study.new_per_day,
             reviews,
             if reviews == 1 { "" } else { "s" },
+            match self.study.new_card_order {
+                NewCardOrder::Deck => "deck",
+                NewCardOrder::Random => "random",
+            },
+            match self.study.new_card_placement {
+                NewCardPlacement::AfterReviews => "after reviews",
+                NewCardPlacement::Mixed => "mixed with reviews",
+            },
             self.study.desired_retention * 100.0,
             if self.trained_params {
                 "trained"
@@ -123,6 +198,8 @@ mod tests {
             new_per_day: 5,
             reviews_per_day: 50,
             desired_retention: 0.85,
+            new_card_order: NewCardOrder::Random,
+            new_card_placement: NewCardPlacement::Mixed,
         };
         study.check().unwrap().apply_to(&mut settings);
         assert_eq!(StudySettings::of(&settings), study);
@@ -155,7 +232,8 @@ mod tests {
         assert!(summary.trained_params);
         assert_eq!(
             summary.to_string(),
-            "20 new and 200 reviews a day, 90% desired retention, trained FSRS-7 parameters"
+            "20 new and 200 reviews a day, new cards in deck order after reviews, \
+             90% desired retention, trained FSRS-7 parameters"
         );
         assert!(set_params(&mut settings, &[1.0]).is_err());
         fsrs(&settings).unwrap();

@@ -17,9 +17,19 @@ namespace flashcards {
 struct Limits {
   uint16_t newPerDay = 20;
   uint16_t reviewsPerDay = 200;
+  // At most this many reviews and new cards are loaded per session, to
+  // bound memory; opening the deck again loads more.
+  uint16_t maxSessionReviews = 300;
+  uint16_t maxSessionNew = 100;
   // A learning card due within this time is shown early rather than ending
   // the session, like Anki's "learn ahead limit".
   uint32_t learnAheadSeconds = 20 * 60;
+};
+
+// The order of a session. Reviews always come lowest retrievability first.
+struct Ordering {
+  bool randomNewOrder = false;     // a fixed shuffle instead of deck order
+  bool mixNewWithReviews = false;  // spread new cards among the reviews
 };
 
 // A study day runs from 4 am to 4 am local time, as in Anki.
@@ -36,6 +46,7 @@ uint32_t intervalSeconds(float days);
 struct QueueItem {
   uint32_t cardIndex;
   StateRecord state;
+  float retrievability;  // at the start of the session; reviews only
 };
 
 // Fixed-capacity array of queue items. Allocated once per session with a
@@ -65,10 +76,10 @@ class QueueBuffer {
 
 class ReviewSession {
  public:
-  // Starts a session; follow with consider() for every card, then
+  // Starts a session at `now`; follow with consider() for every card, then
   // finishLoading(). Returns false if the queues cannot be allocated.
-  bool begin(const fsrs7::Config& config, const Limits& limits, const StudyDay& day, uint16_t newDoneToday,
-             uint16_t reviewsDoneToday);
+  bool begin(const fsrs7::Config& config, const Limits& limits, const Ordering& ordering, const StudyDay& day,
+             uint32_t now, uint16_t newDoneToday, uint16_t reviewsDoneToday);
   void consider(uint32_t cardIndex, const StateRecord& state);
   void finishLoading();
   void clear();
@@ -96,17 +107,23 @@ class ReviewSession {
 
   float elapsedDays(const QueueItem& item, uint32_t now) const;
   void insertLearning(const QueueItem& item);
+  bool newBefore(const QueueItem& a, const QueueItem& b) const;
+  bool showNewNext() const;
 
   fsrs7::Config config_{};
   Limits limits_{};
+  Ordering ordering_{};
   StudyDay day_{};
+  uint32_t now_ = 0;
 
-  QueueBuffer reviews_;   // sorted by due once loaded
-  QueueBuffer newCards_;  // in deck order
+  QueueBuffer reviews_;   // lowest retrievability first once loaded
+  QueueBuffer newCards_;  // in deck order or shuffled
   QueueBuffer learning_;  // sorted by due
   size_t reviewPos_ = 0;
   size_t newPos_ = 0;
-  size_t latestReviewSlot_ = 0;  // while loading: slot with the latest due
+  // While loading, when a queue is full: the slot a better card replaces.
+  size_t worstReviewSlot_ = 0;
+  size_t worstNewSlot_ = 0;
 
   const QueueItem* current_ = nullptr;
   Source currentSource_ = Source::None;

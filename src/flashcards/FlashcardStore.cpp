@@ -103,20 +103,22 @@ bool Deck::open(const std::string& name) {
   }
   settings_ = defaultDeckSettings();
   const uint32_t settingsOffset = deckSettingsOffset(header_);
+  const size_t settingsSize = std::min(deckSettingsSize(header_), kDeckSettingsSize);
   if (settingsOffset != 0) {
     uint8_t block[kDeckSettingsSize];
-    if (!file.seekSet(settingsOffset) || !readExact(file, block, sizeof(block))) {
+    if (!file.seekSet(settingsOffset) || !readExact(file, block, settingsSize)) {
       file.close();
       LOG_ERR(TAG, "Cannot read the settings of %s", path_.c_str());
       header_ = DeckHeader{};
       return false;
     }
-    decodeDeckSettings(block, settings_);
+    decodeDeckSettings(block, settingsSize, settings_);
   }
   file.close();
-  LOG_INF(TAG, "%s: %u new and %u reviews a day, retention %.2f", name.c_str(),
+  LOG_INF(TAG, "%s: %u new and %u reviews a day, retention %.2f, %s new order, new %s", name.c_str(),
           static_cast<unsigned>(settings_.newPerDay), static_cast<unsigned>(settings_.reviewsPerDay),
-          static_cast<double>(settings_.fsrs.desiredRetention));
+          static_cast<double>(settings_.fsrs.desiredRetention), settings_.randomNewOrder ? "random" : "deck",
+          settings_.mixNewWithReviews ? "mixed" : "after reviews");
   return true;
 }
 
@@ -125,6 +127,13 @@ Limits Deck::limits() const {
   limits.newPerDay = settings_.newPerDay;
   limits.reviewsPerDay = settings_.reviewsPerDay;
   return limits;
+}
+
+Ordering Deck::ordering() const {
+  Ordering ordering;
+  ordering.randomNewOrder = settings_.randomNewOrder;
+  ordering.mixNewWithReviews = settings_.mixNewWithReviews;
+  return ordering;
 }
 
 void Deck::countToday(const StudyDay& day, uint16_t& newDone, uint16_t& reviewsDone) const {

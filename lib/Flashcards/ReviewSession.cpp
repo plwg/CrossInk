@@ -18,6 +18,42 @@ bool dueBefore(const QueueItem& a, const QueueItem& b) {
   return a.cardIndex < b.cardIndex;
 }
 
+// The card most likely forgotten first.
+bool lessRetrievable(const QueueItem& a, const QueueItem& b) {
+  if (a.retrievability != b.retrievability) return a.retrievability < b.retrievability;
+  return a.cardIndex < b.cardIndex;
+}
+
+// A fixed shuffle of card positions (MurmurHash3's finaliser, a bijection),
+// so the random order is the same every session.
+uint32_t shuffleKey(uint32_t cardIndex) {
+  uint32_t x = cardIndex + 0x9e3779b9u;
+  x ^= x >> 16;
+  x *= 0x85ebca6bu;
+  x ^= x >> 13;
+  x *= 0xc2b2ae35u;
+  x ^= x >> 16;
+  return x;
+}
+
+// Adds `item` to a bounded queue that keeps the cards first in `before`
+// order. `worst` tracks the slot a better card replaces once full.
+template <typename Before>
+void offer(QueueBuffer& queue, size_t& worst, const QueueItem& item, Before before) {
+  if (queue.capacity() == 0) return;
+  if (!queue.full()) {
+    queue.pushBack(item);
+    if (queue.size() == 1 || before(queue[worst], item)) worst = queue.size() - 1;
+    return;
+  }
+  if (!before(item, queue[worst])) return;
+  queue[worst] = item;
+  worst = 0;
+  for (size_t i = 1; i < queue.size(); ++i) {
+    if (before(queue[worst], queue[i])) worst = i;
+  }
+}
+
 }  // namespace
 
 bool QueueBuffer::allocate(size_t capacity) {
@@ -65,14 +101,18 @@ StudyDay studyDayFor(uint32_t now, int32_t utcOffsetSeconds) {
 // Shared with the inki PC tool, so both schedule a card for the same second.
 uint32_t intervalSeconds(float days) { return inki_interval_seconds(days); }
 
-bool ReviewSession::begin(const fsrs7::Config& config, const Limits& limits, const StudyDay& day, uint16_t newDoneToday,
-                          uint16_t reviewsDoneToday) {
+bool ReviewSession::begin(const fsrs7::Config& config, const Limits& limits, const Ordering& ordering,
+                          const StudyDay& day, uint32_t now, uint16_t newDoneToday, uint16_t reviewsDoneToday) {
   clear();
   config_ = config;
   limits_ = limits;
+  ordering_ = ordering;
   day_ = day;
-  const size_t reviewCapacity = limits.reviewsPerDay > reviewsDoneToday ? limits.reviewsPerDay - reviewsDoneToday : 0;
-  const size_t newCapacity = limits.newPerDay > newDoneToday ? limits.newPerDay - newDoneToday : 0;
+  now_ = now;
+  const size_t reviewsLeft = limits.reviewsPerDay > reviewsDoneToday ? limits.reviewsPerDay - reviewsDoneToday : 0;
+  const size_t newLeft = limits.newPerDay > newDoneToday ? limits.newPerDay - newDoneToday : 0;
+  const size_t reviewCapacity = std::min<size_t>(reviewsLeft, limits.maxSessionReviews);
+  const size_t newCapacity = std::min<size_t>(newLeft, limits.maxSessionNew);
   if (!reviews_.allocate(reviewCapacity) || !newCards_.allocate(newCapacity) ||
       !learning_.allocate(reviewCapacity + newCapacity + kExtraLearningSlots)) {
     clear();
@@ -87,15 +127,21 @@ void ReviewSession::clear() {
   learning_.release();
   reviewPos_ = 0;
   newPos_ = 0;
-  latestReviewSlot_ = 0;
+  worstReviewSlot_ = 0;
+  worstNewSlot_ = 0;
   current_ = nullptr;
   currentSource_ = Source::None;
 }
 
+bool ReviewSession::newBefore(const QueueItem& a, const QueueItem& b) const {
+  if (ordering_.randomNewOrder) return shuffleKey(a.cardIndex) < shuffleKey(b.cardIndex);
+  return a.cardIndex < b.cardIndex;
+}
+
 void ReviewSession::consider(uint32_t cardIndex, const StateRecord& state) {
-  const QueueItem item{cardIndex, state};
+  QueueItem item{cardIndex, state, 0.0f};
   if (state.isNew()) {
-    newCards_.pushBack(item);
+    offer(newCards_, worstNewSlot_, item, [this](const QueueItem& a, const QueueItem& b) { return newBefore(a, b); });
     return;
   }
   if (state.due > day_.end) return;
@@ -108,25 +154,27 @@ void ReviewSession::consider(uint32_t cardIndex, const StateRecord& state) {
     return;
   }
   if (reviews_.capacity() == 0) return;
-  if (!reviews_.full()) {
-    reviews_.pushBack(item);
-    if (reviews_.size() == 1 || dueBefore(reviews_[latestReviewSlot_], item)) {
-      latestReviewSlot_ = reviews_.size() - 1;
-    }
-    return;
-  }
-  // Full: keep the most overdue cards.
-  if (!dueBefore(item, reviews_[latestReviewSlot_])) return;
-  reviews_[latestReviewSlot_] = item;
-  latestReviewSlot_ = 0;
-  for (size_t i = 1; i < reviews_.size(); ++i) {
-    if (dueBefore(reviews_[latestReviewSlot_], reviews_[i])) latestReviewSlot_ = i;
-  }
+  // Past the limit, keep the cards most likely forgotten.
+  item.retrievability = fsrs7::retrievability(config_.params, state.memory, elapsedDays(item, now_));
+  offer(reviews_, worstReviewSlot_, item, lessRetrievable);
 }
 
 void ReviewSession::finishLoading() {
-  std::sort(reviews_.begin(), reviews_.end(), dueBefore);
+  std::sort(reviews_.begin(), reviews_.end(), lessRetrievable);
+  std::sort(newCards_.begin(), newCards_.end(),
+            [this](const QueueItem& a, const QueueItem& b) { return newBefore(a, b); });
   std::sort(learning_.begin(), learning_.end(), dueBefore);
+}
+
+// With mixing, new cards are spread evenly: one is due once its share of
+// the new cards falls behind the share of reviews done.
+bool ReviewSession::showNewNext() const {
+  const bool reviewsLeft = reviewPos_ < reviews_.size();
+  const bool newLeft = newPos_ < newCards_.size();
+  if (!newLeft) return false;
+  if (!reviewsLeft) return true;
+  if (!ordering_.mixNewWithReviews) return false;
+  return static_cast<uint64_t>(newPos_) * reviews_.size() < static_cast<uint64_t>(reviewPos_) * newCards_.size();
 }
 
 const QueueItem* ReviewSession::pick(uint32_t now) {
@@ -135,12 +183,12 @@ const QueueItem* ReviewSession::pick(uint32_t now) {
   if (!learning_.empty() && learning_[0].state.due <= now) {
     currentSource_ = Source::Learning;
     current_ = &learning_[0];
+  } else if (showNewNext()) {
+    currentSource_ = Source::New;
+    current_ = &newCards_[newPos_];
   } else if (reviewPos_ < reviews_.size()) {
     currentSource_ = Source::Review;
     current_ = &reviews_[reviewPos_];
-  } else if (newPos_ < newCards_.size()) {
-    currentSource_ = Source::New;
-    current_ = &newCards_[newPos_];
   } else if (!learning_.empty() && learning_[0].state.due <= now + limits_.learnAheadSeconds) {
     currentSource_ = Source::Learning;
     current_ = &learning_[0];
@@ -194,7 +242,7 @@ void ReviewSession::answer(uint32_t now, fsrs7::Rating rating, uint16_t answerSe
   current_ = nullptr;
   currentSource_ = Source::None;
 
-  if (newState.due <= day_.end) insertLearning(QueueItem{item.cardIndex, newState});
+  if (newState.due <= day_.end) insertLearning(QueueItem{item.cardIndex, newState, 0.0f});
 }
 
 void ReviewSession::insertLearning(const QueueItem& item) {

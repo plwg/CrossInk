@@ -16,9 +16,9 @@ extern "C" {
 #endif
 
 #define INKI_PARAM_COUNT 34
-#define INKI_DECK_VERSION 2
+#define INKI_DECK_VERSION 3
 #define INKI_DECK_HEADER_SIZE 32
-#define INKI_DECK_SETTINGS_SIZE 144
+#define INKI_DECK_SETTINGS_SIZE 160  // version 3; version 2 has 144
 #define INKI_INDEX_ENTRY_SIZE 16
 #define INKI_STATE_RECORD_SIZE 20
 #define INKI_REVIEW_LOG_ENTRY_SIZE 32
@@ -75,7 +75,14 @@ typedef struct {
   uint16_t reviews_per_day;  // relearning is not limited
   float desired_retention;
   float params[INKI_PARAM_COUNT];  // FSRS-7 defaults or trained parameters
+  uint8_t new_card_order;          // INKI_NEW_ORDER_*
+  uint8_t new_card_placement;      // INKI_NEW_AFTER_REVIEWS or INKI_NEW_MIXED
 } InkiDeckSettings;
+
+#define INKI_NEW_ORDER_DECK 0     // the order of the deck file
+#define INKI_NEW_ORDER_RANDOM 1   // a fixed random order
+#define INKI_NEW_AFTER_REVIEWS 0  // new cards after the day's reviews
+#define INKI_NEW_MIXED 1          // new cards spread among the reviews
 
 typedef struct {
   uint64_t anki_card_id;
@@ -109,13 +116,16 @@ bool inki_decode_deck_header(const uint8_t* in /* 32 bytes */, uint64_t file_siz
 
 // Offset of the settings block, or 0 for a version 1 deck, which has none.
 uint32_t inki_deck_settings_offset(const InkiDeckHeader* header);
+// Size of the settings block: 0, 144 (version 2) or 160 bytes.
+uint32_t inki_deck_settings_size(const InkiDeckHeader* header);
 // 20 new cards and 200 reviews a day, 90% retention, FSRS-7 default parameters.
 void inki_default_deck_settings(InkiDeckSettings* out);
-void inki_encode_deck_settings(const InkiDeckSettings* settings, uint8_t* out /* 144 bytes */);
-// A null `in` gives the defaults. A retention FSRS-7 cannot use, or a
-// parameter that is not a number, falls back to the default; parameters are
-// clipped.
-void inki_decode_deck_settings(const uint8_t* in /* 144 bytes */, InkiDeckSettings* out);
+void inki_encode_deck_settings(const InkiDeckSettings* settings, uint8_t* out /* 160 bytes */);
+// Decodes a settings block of `length` bytes (inki_deck_settings_size).
+// A null `in`, or fewer than 144 bytes, gives the defaults. A retention
+// FSRS-7 cannot use, a parameter that is not a number or an unknown option
+// falls back to the default; parameters are clipped.
+void inki_decode_deck_settings(const uint8_t* in, size_t length, InkiDeckSettings* out);
 // Complete answer-log entries; a partly written last entry is not counted.
 uint64_t inki_review_log_entries(const InkiDeckHeader* header, uint64_t file_size);
 // Where the next answer goes: after the last complete entry.

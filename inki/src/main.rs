@@ -8,7 +8,10 @@ use fsrs::{FSRS, MemoryState};
 use inki::collection::Collection;
 use inki::deck_export::{ExportOptions, build_decks, write_deck};
 use inki::deck_file::DeckFile;
-use inki::settings::{self, DeckSettings, MAX_PER_DAY, SettingsSummary, check_retention};
+use inki::settings::{
+    self, DeckSettings, MAX_PER_DAY, NewCardOrder, NewCardPlacement, SettingsSummary,
+    StudySettings, check_retention,
+};
 use inki::train::TrainResult;
 
 /// PC companion for the CrossInk flashcard app.
@@ -32,6 +35,12 @@ struct StudyArgs {
     /// means more reviews [default for new decks: 0.9].
     #[arg(long, value_parser = parse_retention)]
     desired_retention: Option<f32>,
+    /// Order of new cards [default for new decks: deck].
+    #[arg(long, value_enum)]
+    new_order: Option<NewCardOrder>,
+    /// When new cards are shown [default for new decks: after-reviews].
+    #[arg(long, value_enum)]
+    new_placement: Option<NewCardPlacement>,
 }
 
 impl StudyArgs {
@@ -46,9 +55,19 @@ impl StudyArgs {
         if let Some(r) = self.desired_retention {
             settings.desired_retention = r;
         }
+        let mut study = StudySettings::of(settings);
+        if let Some(order) = self.new_order {
+            study.new_card_order = order;
+        }
+        if let Some(placement) = self.new_placement {
+            study.new_card_placement = placement;
+        }
+        study.apply_to(settings);
         self.new_per_day.is_some()
             || self.reviews_per_day.is_some()
             || self.desired_retention.is_some()
+            || self.new_order.is_some()
+            || self.new_placement.is_some()
     }
 }
 

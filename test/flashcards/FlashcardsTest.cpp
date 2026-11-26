@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <vector>
 
 #include "FlashcardFormat.h"
 #include "ReviewSession.h"
@@ -36,7 +37,7 @@ DeckHeader sampleHeader() {
   h.cardCount = 3;
   h.nameLength = 5;
   h.version = flashcards::kFormatVersion;
-  h.indexOffset = 32 + 144 + 5;
+  h.indexOffset = 32 + 160 + 5;
   h.stateOffset = h.indexOffset + 3 * 16 + 100;
   h.logOffset = h.stateOffset + 3 * 20;
   return h;
@@ -98,19 +99,35 @@ TEST(FlashcardFormat, SettingsBlockAndVersion1) {
   settings.newPerDay = 7;
   settings.fsrs.params.w[0] = 0.5f;
   settings.fsrs.desiredRetention = 0.85f;
+  settings.randomNewOrder = true;
+  settings.mixNewWithReviews = true;
   uint8_t block[flashcards::kDeckSettingsSize];
   flashcards::encodeDeckSettings(settings, block);
   EXPECT_EQ(7, block[0]);
+  EXPECT_EQ(1, block[144]);
+  EXPECT_EQ(1, block[145]);
   flashcards::DeckSettings decoded{};
-  flashcards::decodeDeckSettings(block, decoded);
+  flashcards::decodeDeckSettings(block, sizeof(block), decoded);
   EXPECT_EQ(7u, decoded.newPerDay);
   EXPECT_FLOAT_EQ(0.5f, decoded.fsrs.params.w[0]);
   EXPECT_FLOAT_EQ(0.85f, decoded.fsrs.desiredRetention);
+  EXPECT_TRUE(decoded.randomNewOrder);
+  EXPECT_TRUE(decoded.mixNewWithReviews);
+
+  // A version 2 block has no order options: they get the defaults.
+  DeckHeader v2 = h;
+  v2.version = 2;
+  EXPECT_EQ(144u, flashcards::deckSettingsSize(v2));
+  EXPECT_EQ(160u, flashcards::deckSettingsSize(h));
+  flashcards::decodeDeckSettings(block, 144, decoded);
+  EXPECT_EQ(7u, decoded.newPerDay);
+  EXPECT_FALSE(decoded.randomNewOrder);
+  EXPECT_FALSE(decoded.mixNewWithReviews);
 
   // A damaged retention falls back to the default.
   const float bad = 3.0f;
   std::memcpy(block + 4, &bad, sizeof(bad));
-  flashcards::decodeDeckSettings(block, decoded);
+  flashcards::decodeDeckSettings(block, sizeof(block), decoded);
   EXPECT_FLOAT_EQ(0.9f, decoded.fsrs.desiredRetention);
 }
 
@@ -206,19 +223,34 @@ TEST(IntervalSeconds, ClampsToAtLeastOneMinute) {
 
 class SessionTest : public ::testing::Test {
  protected:
-  void begin(Limits limits = Limits{}, uint16_t newDone = 0, uint16_t reviewsDone = 0) {
-    ASSERT_TRUE(session.begin(fsrs7::defaultConfig(), limits, day, newDone, reviewsDone));
+  void begin(Limits limits = Limits{}, uint16_t newDone = 0, uint16_t reviewsDone = 0,
+             flashcards::Ordering ordering = flashcards::Ordering{}) {
+    ASSERT_TRUE(session.begin(fsrs7::defaultConfig(), limits, ordering, day, kNoon, newDone, reviewsDone));
+  }
+
+  // Card indexes in the order the session shows them, answering Easy.
+  std::vector<uint32_t> studyAll() {
+    std::vector<uint32_t> order;
+    while (const QueueItem* item = session.pick(kNoon)) {
+      order.push_back(item->cardIndex);
+      StateRecord state{};
+      ReviewLogEntry log{};
+      session.answer(kNoon, fsrs7::Rating::Easy, 5, state, log);
+    }
+    return order;
   }
 
   StudyDay day = flashcards::studyDayFor(kNoon, 0);
   ReviewSession session;
 };
 
-TEST_F(SessionTest, ShowsReviewsByDueThenNewCards) {
+TEST_F(SessionTest, ShowsReviewsLeastRetrievableFirstThenNewCards) {
   begin();
   session.consider(0, newCard());
-  session.consider(1, reviewCard(kNoon - 10 * kDay, kNoon - kDay));      // overdue
-  session.consider(2, reviewCard(kNoon - 10 * kDay, kNoon - 3 * kDay));  // more overdue
+  // Same memory (stability 10 days): the longer since the last review, the
+  // lower the retrievability, whatever the due time says.
+  session.consider(1, reviewCard(kNoon - 10 * kDay, kNoon - 3 * kDay));
+  session.consider(2, reviewCard(kNoon - 12 * kDay, kNoon - kDay));
   session.consider(3, reviewCard(kNoon - 2 * kDay, kNoon + 30 * kDay));  // not due
   session.consider(4, reviewCard(kNoon - 5 * kDay, kNoon + 3 * kHour));  // due later today
   session.finishLoading();
@@ -301,16 +333,14 @@ TEST_F(SessionTest, RespectsDailyLimitsAndDoneCounts) {
   limits.reviewsPerDay = 2;
   begin(limits, 1, 0);
   for (uint32_t i = 0; i < 10; ++i) session.consider(i, newCard());
-  // Five due reviews; the two most overdue are kept.
+  // Five due reviews; the two least retrievable are kept.
   for (uint32_t i = 0; i < 5; ++i) {
-    session.consider(100 + i, reviewCard(kNoon - 20 * kDay, kNoon - (i + 1) * kDay));
+    session.consider(100 + i, reviewCard(kNoon - (20 + i) * kDay, kNoon - kDay));
   }
   session.finishLoading();
   EXPECT_EQ(2u, session.newCount());
   EXPECT_EQ(2u, session.dueCount());
-  const QueueItem* item = session.pick(kNoon);
-  ASSERT_NE(nullptr, item);
-  EXPECT_EQ(104u, item->cardIndex);  // due 5 days ago
+  EXPECT_EQ((std::vector<uint32_t>{104, 103, 0, 1}), studyAll());
 }
 
 TEST_F(SessionTest, LimitsReachedLeaveNothingToStudy) {
@@ -336,4 +366,54 @@ TEST_F(SessionTest, PreviewMatchesFsrs) {
   const fsrs7::NextStates expected = fsrs7::nextStates(fsrs7::kDefaultParams, &state.memory, 0.9f, 4.0f);
   EXPECT_FLOAT_EQ(expected.good.intervalDays, preview.good.intervalDays);
   EXPECT_FLOAT_EQ(expected.again.memory.stability, preview.again.memory.stability);
+}
+
+TEST_F(SessionTest, RandomNewOrderIsAFixedShuffle) {
+  Limits limits;
+  limits.newPerDay = 10;
+  flashcards::Ordering ordering;
+  ordering.randomNewOrder = true;
+  auto load = [&] {
+    begin(limits, 0, 0, ordering);
+    for (uint32_t i = 0; i < 100; ++i) session.consider(i, newCard());
+    session.finishLoading();
+    return studyAll();
+  };
+  const std::vector<uint32_t> first = load();
+  ASSERT_EQ(10u, first.size());
+  EXPECT_NE((std::vector<uint32_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}), first);
+  EXPECT_EQ(first, load()) << "the same cards in the same order every session";
+}
+
+TEST_F(SessionTest, MixesNewCardsEvenlyWithReviews) {
+  Limits limits;
+  limits.newPerDay = 2;
+  flashcards::Ordering ordering;
+  ordering.mixNewWithReviews = true;
+  begin(limits, 0, 0, ordering);
+  session.consider(0, newCard());
+  session.consider(1, newCard());
+  for (uint32_t i = 0; i < 4; ++i) {
+    session.consider(10 + i, reviewCard(kNoon - (20 - i) * kDay, kNoon - kDay));
+  }
+  session.finishLoading();
+  EXPECT_EQ((std::vector<uint32_t>{10, 0, 11, 12, 1, 13}), studyAll());
+
+  begin(limits);  // after reviews
+  session.consider(0, newCard());
+  session.consider(10, reviewCard(kNoon - 20 * kDay, kNoon - kDay));
+  session.finishLoading();
+  EXPECT_EQ((std::vector<uint32_t>{10, 0}), studyAll());
+}
+
+TEST_F(SessionTest, LoadsAtMostTheSessionCaps) {
+  Limits limits;
+  limits.newPerDay = 9999;
+  limits.reviewsPerDay = 9999;
+  begin(limits);
+  for (uint32_t i = 0; i < 500; ++i) session.consider(i, newCard());
+  for (uint32_t i = 0; i < 500; ++i) session.consider(1000 + i, reviewCard(kNoon - 20 * kDay, kNoon - kDay));
+  session.finishLoading();
+  EXPECT_EQ(Limits{}.maxSessionNew, session.newCount());
+  EXPECT_EQ(Limits{}.maxSessionReviews, session.dueCount());
 }

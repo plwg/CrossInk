@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! header        32 bytes (DeckHeader)
-//! settings      144 bytes (DeckSettings): daily limits and FSRS-7 parameters
+//! settings      160 bytes (DeckSettings): daily limits, card order, FSRS-7 parameters
 //! deck name     the Anki deck name, UTF-8, name_length bytes
 //! card index    card_count × 16 bytes at index_offset (CardIndexEntry)
 //! card text     per card: question, NUL, answer
@@ -15,8 +15,11 @@
 //! never rewrites the file. This module holds the fixed-size pieces; the PC
 //! tool assembles whole files from them.
 //!
-//! Version 1 files have no settings block (the name follows the header) and
-//! are read with the default settings.
+//! Older versions are still read: version 2 has a 144-byte settings block
+//! without the card-order options, version 1 none at all (the name follows
+//! the header); what is missing gets the defaults. Readers ignore the
+//! settings block's reserved bytes, so later optional settings can use them
+//! without a new version.
 
 use crate::fsrs7::{
     DEFAULT_DESIRED_RETENTION, DEFAULT_PARAMS, MemoryState, PARAM_COUNT, Params, clip_params,
@@ -25,10 +28,21 @@ use crate::fsrs7::{
 
 pub const EXTENSION: &str = "inki";
 pub const MAGIC: [u8; 4] = *b"INKD";
-/// The version written. Version 1 is still read.
-pub const VERSION: u16 = 2;
+/// The version written. Versions 1 and 2 are still read.
+pub const VERSION: u16 = 3;
 pub const HEADER_SIZE: usize = 32;
-pub const SETTINGS_SIZE: usize = 8 + 4 * PARAM_COUNT;
+/// The settings block written (version 3).
+pub const SETTINGS_SIZE: usize = 160;
+/// The settings block of version 2 files: limits, retention and parameters.
+pub const SETTINGS_SIZE_V2: usize = 8 + 4 * PARAM_COUNT;
+/// New cards in the order of the deck file (Anki's order when exported).
+pub const NEW_ORDER_DECK: u8 = 0;
+/// New cards in a fixed random order.
+pub const NEW_ORDER_RANDOM: u8 = 1;
+/// New cards after the day's reviews.
+pub const NEW_AFTER_REVIEWS: u8 = 0;
+/// New cards spread evenly among the day's reviews.
+pub const NEW_MIXED: u8 = 1;
 pub const DEFAULT_NEW_PER_DAY: u16 = 20;
 pub const DEFAULT_REVIEWS_PER_DAY: u16 = 200;
 pub const INDEX_ENTRY_SIZE: usize = 16;
@@ -48,7 +62,7 @@ pub struct DeckHeader {
     /// Always `state_offset + card_count * STATE_RECORD_SIZE`.
     pub log_offset: u32,
     pub name_length: u16,
-    /// [`VERSION`] when writing; 1 or 2 when read.
+    /// [`VERSION`] when writing; 1 to 3 when read.
     pub version: u16,
 }
 
@@ -63,6 +77,10 @@ pub struct DeckSettings {
     pub desired_retention: f32,
     /// FSRS-7 parameters: the defaults, or trained on the user's reviews.
     pub params: Params,
+    /// [`NEW_ORDER_DECK`] or [`NEW_ORDER_RANDOM`].
+    pub new_card_order: u8,
+    /// [`NEW_AFTER_REVIEWS`] or [`NEW_MIXED`].
+    pub new_card_placement: u8,
 }
 
 impl Default for DeckSettings {
@@ -72,6 +90,8 @@ impl Default for DeckSettings {
             reviews_per_day: DEFAULT_REVIEWS_PER_DAY,
             desired_retention: DEFAULT_DESIRED_RETENTION,
             params: DEFAULT_PARAMS,
+            new_card_order: NEW_ORDER_DECK,
+            new_card_placement: NEW_AFTER_REVIEWS,
         }
     }
 }
@@ -188,12 +208,18 @@ impl DeckHeader {
         (self.version >= 2).then_some(HEADER_SIZE as u32)
     }
 
+    /// Size of the settings block: 0, 144 or 160 bytes by version.
+    pub fn settings_size(&self) -> usize {
+        match self.version {
+            0 | 1 => 0,
+            2 => SETTINGS_SIZE_V2,
+            _ => SETTINGS_SIZE,
+        }
+    }
+
     /// Where the deck name is.
     pub fn name_offset(&self) -> u32 {
-        match self.settings_offset() {
-            Some(at) => at + SETTINGS_SIZE as u32,
-            None => HEADER_SIZE as u32,
-        }
+        HEADER_SIZE as u32 + self.settings_size() as u32
     }
 
     /// Complete answer-log entries in a file of `file_size` bytes. A partly
@@ -219,32 +245,46 @@ impl DeckSettings {
         for (i, p) in self.params.iter().enumerate() {
             put(&mut out, 8 + 4 * i, &p.to_le_bytes());
         }
+        out[SETTINGS_SIZE_V2] = self.new_card_order;
+        out[SETTINGS_SIZE_V2 + 1] = self.new_card_placement;
         out
     }
 
-    /// Decodes a settings block. A retention FSRS-7 cannot use, or any
-    /// parameter that is not a number, falls back to the default; parameters
-    /// are clipped to the ranges FSRS-7 accepts.
-    pub fn decode(bytes: &[u8; SETTINGS_SIZE]) -> Self {
+    /// Decodes a settings block of [`SETTINGS_SIZE`] bytes, or
+    /// [`SETTINGS_SIZE_V2`] from a version 2 file; anything shorter gives
+    /// the defaults. A retention FSRS-7 cannot use, any parameter that is
+    /// not a number, or an unknown option falls back to the default;
+    /// parameters are clipped to the ranges FSRS-7 accepts.
+    pub fn decode(block: &[u8]) -> Self {
+        if block.len() < SETTINGS_SIZE_V2 {
+            return Self::default();
+        }
+        // Options missing from a version 2 block read as 0, their default.
+        let mut bytes = [0u8; SETTINGS_SIZE];
+        let len = block.len().min(SETTINGS_SIZE);
+        bytes[..len].copy_from_slice(&block[..len]);
+        let option = |at: usize, max: u8| if bytes[at] <= max { bytes[at] } else { 0 };
         let mut params = [0.0f32; PARAM_COUNT];
         for (i, p) in params.iter_mut().enumerate() {
-            *p = f32_at(bytes, 8 + 4 * i);
+            *p = f32_at(&bytes, 8 + 4 * i);
         }
         if params.iter().all(|p| p.is_finite()) {
             clip_params(&mut params);
         } else {
             params = DEFAULT_PARAMS;
         }
-        let retention = f32_at(bytes, 4);
+        let retention = f32_at(&bytes, 4);
         Self {
-            new_per_day: u16_at(bytes, 0),
-            reviews_per_day: u16_at(bytes, 2),
+            new_per_day: u16_at(&bytes, 0),
+            reviews_per_day: u16_at(&bytes, 2),
             desired_retention: if valid_retention(retention) {
                 retention
             } else {
                 DEFAULT_DESIRED_RETENTION
             },
             params,
+            new_card_order: option(SETTINGS_SIZE_V2, NEW_ORDER_RANDOM),
+            new_card_placement: option(SETTINGS_SIZE_V2 + 1, NEW_MIXED),
         }
     }
 
@@ -341,7 +381,7 @@ mod tests {
 
     fn header() -> DeckHeader {
         // 3 cards, 5-byte name, 100 bytes of text.
-        let index_offset = 32 + 144 + 5;
+        let index_offset = 32 + 160 + 5;
         let state_offset = index_offset + 3 * 16 + 100;
         DeckHeader {
             card_count: 3,
@@ -379,16 +419,20 @@ mod tests {
     fn reads_version_1_without_settings() {
         let mut h = header();
         assert_eq!(h.settings_offset(), Some(32));
+        assert_eq!(h.name_offset(), 192);
+        h.version = 2;
         assert_eq!(h.name_offset(), 176);
         h.version = 1;
         assert_eq!(h.settings_offset(), None);
         assert_eq!(h.name_offset(), 32);
         assert_eq!(DeckHeader::decode(&h.encode(), 1 << 20), Some(h));
-        // Version 2 needs room for the settings block before the name.
+        // Later versions need room for the settings block before the name.
         let mut v2 = h;
         v2.version = 2;
         v2.index_offset = 32 + 5;
         assert_eq!(DeckHeader::decode(&v2.encode(), 1 << 20), None);
+        v2.index_offset = 32 + 144 + 5;
+        assert!(DeckHeader::decode(&v2.encode(), 1 << 20).is_some());
     }
 
     #[test]
@@ -398,6 +442,8 @@ mod tests {
             reviews_per_day: 999,
             desired_retention: 0.85,
             params: DEFAULT_PARAMS,
+            new_card_order: NEW_ORDER_RANDOM,
+            new_card_placement: NEW_MIXED,
         };
         s.params[0] = 0.5;
         let bytes = s.encode();
@@ -406,13 +452,30 @@ mod tests {
         assert!(!s.uses_default_params());
         assert!(DeckSettings::default().uses_default_params());
 
+        assert_eq!((bytes[144], bytes[145]), (1, 1));
+        assert!(bytes[146..].iter().all(|&b| b == 0), "reserved");
+
+        // A version 2 block: same values, default options.
+        let v2 = DeckSettings::decode(&bytes[..SETTINGS_SIZE_V2]);
+        assert_eq!(v2.new_per_day, 5);
+        assert_eq!(v2.params, s.params);
+        assert_eq!(
+            (v2.new_card_order, v2.new_card_placement),
+            (NEW_ORDER_DECK, NEW_AFTER_REVIEWS)
+        );
+        assert_eq!(DeckSettings::decode(&bytes[..10]), DeckSettings::default());
+
         let mut damaged = bytes;
         put(&mut damaged, 4, &1.5f32.to_le_bytes());
         put(&mut damaged, 8, &f32::NAN.to_le_bytes());
+        damaged[144] = 7;
+        damaged[159] = 0xff; // reserved bytes are ignored
         let d = DeckSettings::decode(&damaged);
         assert_eq!(d.desired_retention, DEFAULT_DESIRED_RETENTION);
         assert_eq!(d.params, DEFAULT_PARAMS);
         assert_eq!(d.new_per_day, 5);
+        assert_eq!(d.new_card_order, NEW_ORDER_DECK);
+        assert_eq!(d.new_card_placement, NEW_MIXED);
 
         let mut out_of_range = s;
         out_of_range.params[24] = 3.0;

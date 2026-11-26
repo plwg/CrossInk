@@ -128,7 +128,7 @@ impl DeckFile {
             .settings_offset()
             .map_or_else(DeckSettings::default, |at| {
                 let at = at as usize;
-                DeckSettings::decode(bytes[at..at + SETTINGS_SIZE].try_into().expect("size"))
+                DeckSettings::decode(&bytes[at..at + h.settings_size()])
             });
         let name_start = h.name_offset() as usize;
         let name_end = name_start + usize::from(h.name_length);
@@ -223,6 +223,7 @@ mod tests {
     fn deck() -> DeckFile {
         let mut settings = DeckSettings {
             new_per_day: 7,
+            new_card_order: inki_core::format::NEW_ORDER_RANDOM,
             ..Default::default()
         };
         settings.params[0] = 0.5;
@@ -247,16 +248,18 @@ mod tests {
     fn layout_matches_the_firmware() {
         let bytes = deck().encode().unwrap();
         assert_eq!(&bytes[..4], b"INKD");
-        assert_eq!(u16_at(&bytes, 4), 2);
+        assert_eq!(u16_at(&bytes, 4), 3);
         assert_eq!(u32_at(&bytes, 8), 2);
         assert_eq!(u16_at(&bytes, 32), 7, "new cards per day");
         assert_eq!(u16_at(&bytes, 34), 200, "reviews per day");
         assert_eq!(&bytes[36..40], &0.9f32.to_le_bytes());
         assert_eq!(&bytes[40..44], &0.5f32.to_le_bytes(), "first parameter");
+        assert_eq!(bytes[176], 1, "random new card order");
+        assert_eq!(bytes[177], 0, "new cards after reviews");
         let name_len = usize::from(u16_at(&bytes, 24));
-        assert_eq!(&bytes[176..176 + name_len], b"Languages::German");
+        assert_eq!(&bytes[192..192 + name_len], b"Languages::German");
         let index = u32_at(&bytes, 12) as usize;
-        assert_eq!(index, 176 + name_len);
+        assert_eq!(index, 192 + name_len);
         let text_offset = u32_at(&bytes, index + 8) as usize;
         let text_len = u32_at(&bytes, index + 12) as usize;
         assert_eq!(&bytes[text_offset..text_offset + text_len], b"Hund\0dog");
@@ -272,29 +275,40 @@ mod tests {
         assert_eq!(bytes.len(), log + 64);
     }
 
-    #[test]
-    fn reads_version_1_with_default_settings() {
-        let v2 = deck().encode().unwrap();
-        // The same deck as version 1: no settings block, offsets 144 lower.
-        let mut v1 = v2[..32].to_vec();
-        v1.extend_from_slice(&v2[32 + SETTINGS_SIZE..]);
-        v1[4] = 1;
-        let shift = |at: usize, v1: &mut Vec<u8>| {
-            let value = u32_at(v1, at) - SETTINGS_SIZE as u32;
-            v1[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    /// The same deck as an older version: `removed` settings bytes cut at
+    /// `at`, offsets moved down to match.
+    fn downgrade(version: u8, at: usize, removed: usize) -> Vec<u8> {
+        let v3 = deck().encode().unwrap();
+        let mut old = v3[..at].to_vec();
+        old.extend_from_slice(&v3[at + removed..]);
+        old[4] = version;
+        let shift = |at: usize, old: &mut Vec<u8>| {
+            let value = u32_at(old, at) - removed as u32;
+            old[at..at + 4].copy_from_slice(&value.to_le_bytes());
         };
         for at in [12, 16, 20] {
-            shift(at, &mut v1);
+            shift(at, &mut old);
         }
         for card in 0..2 {
-            shift(u32_at(&v1, 12) as usize + card * 16 + 8, &mut v1);
+            shift(u32_at(&old, 12) as usize + card * 16 + 8, &mut old);
         }
-        let decoded = DeckFile::decode(&v1).unwrap();
-        assert_eq!(decoded.settings, DeckSettings::default());
+        old
+    }
+
+    #[test]
+    fn reads_older_versions_with_default_settings() {
+        let v2 = DeckFile::decode(&downgrade(2, 32 + 144, 16)).unwrap();
+        let mut expected = deck().settings;
+        expected.new_card_order = DeckSettings::default().new_card_order;
+        assert_eq!(v2.settings, expected, "version 2: options default");
+        assert_eq!(v2.cards, deck().cards);
+
+        let v1 = DeckFile::decode(&downgrade(1, 32, SETTINGS_SIZE)).unwrap();
+        assert_eq!(v1.settings, DeckSettings::default());
         assert_eq!(
             DeckFile {
                 settings: deck().settings,
-                ..decoded
+                ..v1
             },
             deck()
         );

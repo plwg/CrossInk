@@ -47,7 +47,8 @@ void FlashcardDeckListActivity::reloadDecks() {
       row.counts = deck.needsNewerFirmware() ? tr(STR_FLASHCARDS_DECK_TOO_NEW) : tr(STR_FLASHCARDS_DECK_FAILED);
     } else if (hasClock) {
       deck.countToday(day, newDone, reviewsDone);
-      if (session.begin(deck.config(), deck.limits(), day, newDone, reviewsDone) && deck.loadSession(session)) {
+      if (session.begin(deck.config(), deck.limits(), deck.ordering(), day, now, newDone, reviewsDone) &&
+          deck.loadSession(session)) {
         char buf[64];
         snprintf(buf, sizeof(buf), tr(STR_FLASHCARDS_DECK_COUNTS), static_cast<unsigned>(session.dueCount()),
                  static_cast<unsigned>(session.newCount()));

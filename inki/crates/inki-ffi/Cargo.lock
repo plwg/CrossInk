@@ -4,14 +4,14 @@ version = 4
 
 [[package]]
 name = "inki-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "inki-ffi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "inki-core",
 ]
